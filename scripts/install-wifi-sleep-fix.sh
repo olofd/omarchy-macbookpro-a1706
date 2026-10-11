@@ -4,10 +4,10 @@
 # Apple's EFI did at boot (antenna/amplifier GPIOs); the patch restores it. See docs/06-wifi-after-sleep.md.
 #   sudo sh install-wifi-sleep-fix.sh            install (a few minutes the first time), then reboot
 #   sudo sh install-wifi-sleep-fix.sh remove     back to the kernel's own driver, then reboot
-# Works on any distribution with DKMS (Arch/Omarchy, Debian/Ubuntu, Fedora, openSUSE): it installs dkms, git and
-# patch with the system's package manager. Needs the headers of the running kernel and internet once per kernel
-# version (the driver source comes from the stable kernel tree). It never unloads the running driver: on this card that kills
-# Wi-Fi until reboot. Details: brcmfmac-apple-resume/README.md.
+# Tested on Omarchy; it should work on any distribution with DKMS (Arch, Debian/Ubuntu, Fedora, openSUSE): it
+# installs dkms, git and patch with the system's package manager. Needs the headers of the running kernel and
+# internet once per kernel version (the driver source comes from the stable kernel tree). It never unloads the
+# running driver: on this card that kills Wi-Fi until reboot. Details: brcmfmac-apple-resume/README.md.
 set -eu
 NAME=brcmfmac-apple-resume
 VER=1.0
