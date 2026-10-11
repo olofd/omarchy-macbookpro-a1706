@@ -100,7 +100,7 @@ were ruled out on the way) is in [chapter 6](../docs/06-wifi-after-sleep.md) of 
 | --- | --- |
 | [`0001-brcmfmac-pcie-restore-Apple-EFI-chip-setup-after-resume.patch`](0001-brcmfmac-pcie-restore-Apple-EFI-chip-setup-after-resume.patch) | the change to `drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c`, with a full description |
 | [`dkms.conf`](dkms.conf) | the DKMS package `brcmfmac-apple-resume`, version 1.0 |
-| [`dkms-build.sh`](dkms-build.sh) | what DKMS runs for each kernel: fetch the `brcm80211` folder of the kernel's upstream release (about 15 MB, from the stable tree's GitHub mirror, or git.kernel.org), cache it in `/var/cache/brcmfmac-apple-resume`, apply the patch with no fuzz, build `brcmfmac.ko` and its three vendor modules with the kernel's own configuration |
+| [`dkms-build.sh`](dkms-build.sh) | what DKMS runs for each kernel: fetch the `brcm80211` folder of the kernel's upstream release (about 15 MB, from the stable tree's GitHub mirror, or git.kernel.org), cache it in `/var/cache/brcmfmac-apple-resume`, apply the patch with no fuzz, build `brcmfmac.ko` with the kernel's own configuration (the kernel's own vendor modules `brcmfmac-wcc/-cyw/-bca` keep working with it: the patch changes no exported symbol) |
 
 ## Build it by hand (without DKMS)
 
