@@ -64,6 +64,13 @@ case "$1" in
     done
     ;;
   post)
+    # After a "deep" (S3) sleep the T1 is never told the Mac is awake, and the Touch Bar and Touch ID stay dark.
+    # macOS and Windows call the ACPI method ASOC.SOCW(1) at wake (t1bridge issue #18); it answers in ~90 ms.
+    # (Never ASOC.FRST: an EC hard reset that leaves the T1 in recovery mode.) Not needed after s2idle.
+    if grep -q '\[deep\]' /sys/power/mem_sleep && modprobe acpi_call 2>/dev/null && [ -w /proc/acpi/call ]; then
+      printf '%s\n' '\_SB.PCI0.XHC1.RHUB.ASOC.SOCW 1' > /proc/acpi/call
+      logger -t mac-sleep "T1 wake call SOCW(1): $(tr -d '\0' < /proc/acpi/call)"
+    fi
     # The keyboard level first, then the services: started first, they would take the restore for a manual change.
     [ -s /run/mac-kbd-backlight ] && cat /run/mac-kbd-backlight > "$kbd/brightness"
     for s in $(cat /run/mac-sleep-lights 2>/dev/null); do systemctl start "$s"; done
@@ -72,12 +79,13 @@ case "$1" in
     # Wi-Fi check and wake log, detached: a background child would be killed when the suspend service ends.
     systemd-run --no-block --collect --unit=wifi-recover /usr/local/sbin/wifi-recover >/dev/null 2>&1
     # The Touch Bar renderer (t1bridge 0.1.12) stops calling its desktop provider after a wake, so the volume and
-    # brightness popups stop until it restarts. Restart it a few seconds after the wake, for each user running it.
-    for u in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $2}'); do
-      systemctl --user -M "$u@" is-active --quiet t1-touchbar.service 2>/dev/null &&
-        systemd-run --no-block --collect --on-active=3 --unit="t1-touchbar-restart-$u" \
-          systemctl --user -M "$u@" restart t1-touchbar.service >/dev/null 2>&1
-    done
+    # brightness popups stop until it restarts. Restart it, for each user running it, 10 s after the wake: systemd
+    # keeps the users' services frozen until every sleep hook has finished, so the hook cannot do it itself.
+    systemd-run --no-block --collect --on-active=10 --unit=t1-touchbar-restart sh -c '
+      for u in $(loginctl list-users --no-legend | awk "{print \$2}"); do
+        systemctl --user -M "$u@" is-active --quiet t1-touchbar.service &&
+          systemctl --user -M "$u@" restart t1-touchbar.service
+      done' >/dev/null 2>&1
     ;;
 esac
 exit 0

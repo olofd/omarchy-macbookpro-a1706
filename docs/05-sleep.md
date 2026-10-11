@@ -42,7 +42,7 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
      light-sensor services; disable wake-up by the T1 (USB `05ac:8600`), which otherwise wakes the Mac a few
      seconds into sleep; write `/var/log/wake-diag/last-pre-sleep.log`.
    - `post`: restore the backlight and the light services, `echo 1 > /sys/bus/pci/rescan` to bring the
-     controllers back, and start `/usr/local/sbin/wifi-recover` (chapter 6) with `systemd-run`; 3 seconds later,
+     controllers back, and start `/usr/local/sbin/wifi-recover` (chapter 6) with `systemd-run`; 10 seconds later,
      restart the Touch Bar renderer (`t1-touchbar.service`), whose volume and brightness popups stop after a wake.
 
    The USB-C ports come back after wake; an adapter plugged in during sleep is picked up by the rescan. The

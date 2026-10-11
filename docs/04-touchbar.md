@@ -63,7 +63,7 @@ Keep it **off the machine and out of git**: it holds data unique to this Mac. To
   themselves and conflict with the older out-of-tree driver. They do not matter for t1bridge; if you use the
   older `apple-ibridge` DKMS setup instead, blacklist them.
 - **The popups stop after a sleep** (t1bridge 0.1.12): the renderer no longer calls the provider after a wake.
-  The sleep hook (chapter 5) restarts `t1-touchbar.service` 3 seconds after every wake. By hand:
+  The sleep hook (chapter 5) restarts `t1-touchbar.service` 10 seconds after every wake. By hand:
   `systemctl --user restart t1-touchbar.service`.
 - Touch ID needs t1bridge's fingerprint packages and a few PAM edits: see [09-touch-id.md](09-touch-id.md).
 - The **ambient light sensor** appears as an IIO device (`/sys/bus/iio/devices/iio:device0`, name `als`) once
