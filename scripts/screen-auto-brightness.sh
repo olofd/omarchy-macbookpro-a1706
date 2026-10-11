@@ -24,7 +24,11 @@ while :; do
   elif [ "$smooth" -le "$ROOMLUX" ]; then t=$(( MIN + (smooth - DARKLUX) * (ROOM - MIN) / (ROOMLUX - DARKLUX) ))
   elif [ "$smooth" -le "$SUNLUX" ];  then t=$(( ROOM + (smooth - ROOMLUX) * (MAXB - ROOM) / (SUNLUX - ROOMLUX) ))
   else t=$MAXB; fi
-  t=$(( t + offset )); [ "$t" -lt 1 ] && t=1; [ "$t" -gt "$MAXB" ] && t=$MAXB
+  # The offset is kept inside what the screen can show. Unbounded, a large drop (to 1, or by another program)
+  # left it so far below the curve that pressing brightness up only paid it back and the screen kept dimming.
+  [ $(( t + offset )) -lt 1 ] && offset=$(( 1 - t ))
+  [ $(( t + offset )) -gt "$MAXB" ] && offset=$(( MAXB - t ))
+  t=$(( t + offset ))
   if   [ "$t" -gt "$cur" ]; then n=$(( cur + STEP )); [ "$n" -gt "$t" ] && n=$t
   elif [ "$t" -lt "$cur" ]; then n=$(( cur - STEP )); [ "$n" -lt "$t" ] && n=$t
   else n=$cur; fi
