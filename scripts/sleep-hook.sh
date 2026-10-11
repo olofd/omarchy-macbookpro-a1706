@@ -27,6 +27,9 @@ case "$1" in
     # A wake check still running from the last wake (lid opened and closed within ~25 s) would otherwise block
     # this wake's check (same unit name) and resume after the next wake with stale timing.
     systemctl stop wifi-recover.service 2>/dev/null
+    # A Thunderbolt rescan from the last wake still running (lid closed again within ~10 s): let it finish, so the
+    # controllers it brings back are removed below.
+    i=0; while systemctl is-active --quiet mac-tb-rescan.service && [ $i -lt 30 ]; do sleep 0.5; i=$((i + 1)); done
     # The T1 (iBridge, USB 05ac:8600) wakes the machine by itself a few seconds into s2idle (its wakeup source
     # fired right at the wake). Keyboard, lid and power button still wake it.
     for d in /sys/bus/usb/devices/*; do
@@ -74,8 +77,10 @@ case "$1" in
     # The keyboard level first, then the services: started first, they would take the restore for a manual change.
     [ -s /run/mac-kbd-backlight ] && cat /run/mac-kbd-backlight > "$kbd/brightness"
     for s in $(cat /run/mac-sleep-lights 2>/dev/null); do systemctl start "$s"; done
-    echo 1 > /sys/bus/pci/rescan
-    modprobe thunderbolt 2>/dev/null
+    # The rescan takes ~5 s per Thunderbolt controller, and the desktop stays frozen until this hook ends: run it
+    # detached, so the keyboard works at once and the USB-C ports follow ~10 s later.
+    systemd-run --no-block --collect --unit=mac-tb-rescan \
+      sh -c 'echo 1 > /sys/bus/pci/rescan; modprobe thunderbolt' >/dev/null 2>&1
     # Wi-Fi check and wake log, detached: a background child would be killed when the suspend service ends.
     systemd-run --no-block --collect --unit=wifi-recover /usr/local/sbin/wifi-recover >/dev/null 2>&1
     # The Touch Bar renderer (t1bridge 0.1.12) stops calling its desktop provider after a wake, so the volume and

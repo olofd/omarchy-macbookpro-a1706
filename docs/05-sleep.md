@@ -45,7 +45,10 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
      controllers back, and start `/usr/local/sbin/wifi-recover` (chapter 6) with `systemd-run`; 10 seconds later,
      restart the Touch Bar renderer (`t1-touchbar.service`), whose volume and brightness popups stop after a wake.
 
-   The USB-C ports come back after wake; an adapter plugged in during sleep is picked up by the rescan. The
+   The rescan runs detached: it takes about 5 seconds per controller, and systemd keeps the desktop frozen
+   until every sleep hook has finished, so run inline it delayed typing after a wake by 10 seconds.
+
+   The USB-C ports come back after wake (about 10 seconds after it); an adapter plugged in during sleep is picked up by the rescan. The
    controllers are found by vendor, device ID and class, not by address, so the hook works if they sit elsewhere
    on your model.
 
