@@ -18,6 +18,7 @@ NM=/etc/NetworkManager/conf.d/90-no-mac-random.conf
 
 if [ "${1:-}" = remove ]; then
   rm -f "$DEST" "$NM"
+  [ -f /etc/modprobe.d/brcmfmac.conf ] && sed -i 's/^#\(options brcmfmac feature_disable\)/\1/' /etc/modprobe.d/brcmfmac.conf
   echo "Removed. Reboot to go back to 2.4 GHz-only Wi-Fi."
   exit 0
 fi
@@ -46,6 +47,10 @@ mkdir -p "$(dirname "$DEST")"
 tr -d '\r' < "$SRC" | sed -e "s/^macaddr=.*/macaddr=$mac/" -e "s/^ccode=.*/ccode=$CCODE/" \
   -e "s/^regrev=.*/regrev=$REGREV/" > "$DEST"
 install -m 644 "$HERE/../files/nm-no-mac-random.conf" "$NM"
+# Omarchy runs the WPA handshake in software on Apple Wi-Fi (brcmfmac feature_disable=0x82000, a workaround for
+# WPA2/WPA3 transition networks). On this card the firmware's own handshake is what the tested Mac uses (with the
+# software one, early tests saw minutes of rejected joins), so Omarchy's line is commented out.
+[ -f /etc/modprobe.d/brcmfmac.conf ] && sed -i 's/^options brcmfmac feature_disable/#&/' /etc/modprobe.d/brcmfmac.conf
 # An NVRAM from an earlier version of this guide, in the old place, would be found second: say so.
 [ -f /usr/lib/firmware/brcm/brcmfmac43602-pcie.txt ] &&
   echo "note: an older copy is in /usr/lib/firmware/brcm/ (no longer used once this one exists; you can delete it)"

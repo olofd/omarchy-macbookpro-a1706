@@ -39,11 +39,16 @@ The installer sets three values in it:
 
 Tested alternatives are in [99-log.md](99-log.md).
 
+## The WPA handshake
+
+Omarchy sets `options brcmfmac feature_disable=0x82000` (in `/etc/modprobe.d/brcmfmac.conf`) on Apple Macs to run
+the WPA handshake in software, a workaround for WPA2/WPA3 transition networks. The installer comments it out, so
+this card does the handshake in its firmware: that is what the tested Mac runs, and with the software handshake
+early tests saw minutes of rejected joins. If your network is a WPA2/WPA3 *transition* network and joins fail,
+uncomment the line again. It made no difference to the post-wake failures ([chapter 6](06-wifi-after-sleep.md)).
+
 ## Settings that do not matter here
 
-- **`brcmfmac feature_disable=0x82000`.** Omarchy sets this on Apple Macs to run the WPA handshake in
-  software (a workaround for WPA2/WPA3 transition networks). Turning it off made no difference to the
-  post-wake failures ([chapter 6](06-wifi-after-sleep.md)).
 - **NetworkManager MAC randomisation.** Turned off in `files/nm-no-mac-random.conf`; harmless, and the log
   shows the card switches MAC during scans, but it was not the cause of any failure.
 - **DFS channels.** Both 5 GHz networks on the test router were on DFS channels (60, 112). Moving them to
