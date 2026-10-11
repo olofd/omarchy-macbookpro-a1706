@@ -27,4 +27,4 @@ hl.config({
 hl.gesture({ fingers = 3, direction = "horizontal", action = "workspace" })
 LUA
 chown "$U:" "$f"
-echo "Done. Reload Hyprland (Super+Alt+Space, or log out and in)."
+echo "Done. Hyprland picks the change up by itself (check: hyprctl configerrors)."
