@@ -1,0 +1,143 @@
+Subject: [PATCH] wifi: brcmfmac: pcie: restore the Apple EFI chip setup after a resume
+
+On Macs with a BCM43602 (MacBookPro13,x and 14,x), 5 GHz joins fail
+after a resume from s2idle (the firmware answers SET_SSID with status 1,
+reported by the driver as status 16) and Bluetooth, which shares the
+antennas, stutters on 2.4 GHz. After a cold boot both work.
+
+The chip loses power during s2idle. brcmf_pcie_pm_leave_D3() then finds
+intmask 0 and re-probes, which re-downloads the firmware onto a chip at
+its power-on defaults. At a cold boot, however, Apple's EFI has already
+set part of the chip up before Linux runs, and the firmware relies on it
+without ever doing it itself. Register dumps at probe (before the
+watchdog reset) and once the firmware is up show, cold boot vs. resume:
+
+  gpioouten    0x00007007 vs 0x00000007   (GPIO 12-14 never become outputs)
+  gpioout      0x00006006 vs 0x00000006   (GPIO 13-14 never driven high)
+  chipcontrol  0x01400090 vs 0x01000000
+  chipctl[2]   0x903aaa2a vs 0xd032aa2a
+
+Save the EFI setup (chipcontrol, the GPIO registers and the indirect
+chipcontrol registers) at the first probe of an Apple BCM43602 after the
+module loads, before the watchdog reset, which preserves it. At a later
+probe that finds the saved output GPIOs no longer enabled, write it back
+after the reset and before the firmware download, so the resumed chip
+starts like a cold-booted one. Only BCM43602 cards with Apple's PCI
+subsystem vendor are touched (other Apple cards are untested); the
+module parameter mac_efi_restore=0 turns it off.
+
+Tested on a MacBookPro13,2 (BCM43602, firmware 7.35.177.61, kernel
+7.2.5): after a resume 5 GHz joins at the first attempt and Bluetooth
+A2DP plays cleanly; before, every 5 GHz join failed.
+---
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+@@ -652,6 +652,98 @@
+ 	}
+ }
+ 
++/* On Macs, Apple's EFI sets part of the chip up before Linux starts, and the
++ * firmware relies on it but never does it itself: on the BCM43602 of the
++ * MacBookPro13,x/14,x, GPIO 12-14 as outputs (13 and 14 high), chipcontrol
++ * bits 0x00400090 and the indirect chipcontrol registers. During s2idle the
++ * chip loses power, so after a resume brcmf_pcie_pm_leave_D3() re-probes a
++ * chip at its power-on defaults: 5 GHz joins then fail (SET_SSID status
++ * 1) and Bluetooth, which shares the antennas, stutters.
++ *
++ * The first probe of an Apple BCM43602 after boot saves what EFI left (before
++ * the watchdog reset, which keeps it). A later probe that finds those GPIOs
++ * no longer driven writes the saved values back after the reset, before the
++ * firmware is downloaded, so a resumed chip starts like a cold-booted one.
++ */
++static bool brcmf_mac_efi_restore = true;
++module_param_named(mac_efi_restore, brcmf_mac_efi_restore, bool, 0444);
++MODULE_PARM_DESC(mac_efi_restore,
++		 "Apple: restore the chip setup EFI did at boot after a resume (default on)");
++
++#define BRCMF_MAC_EFI_CHIPCTL	5
++#define BRCMF_MAC_EFI_DEVS	4
++
++static struct brcmf_mac_efi_state {
++	bool used;
++	u16 devid;		/* pci_dev_id() */
++	u32 chipcontrol;
++	u32 gpioout;
++	u32 gpioouten;
++	u32 gpiocontrol;
++	u32 gpiopullup;
++	u32 gpiopulldown;
++	u32 chipctl[BRCMF_MAC_EFI_CHIPCTL];
++} brcmf_mac_efi[BRCMF_MAC_EFI_DEVS];
++
++static void brcmf_pcie_mac_efi_save_or_restore(struct brcmf_pciedev_info *devinfo,
++					       bool before_reset)
++{
++	struct pci_dev *pdev = devinfo->pdev;
++	struct brcmf_mac_efi_state *st = NULL;
++	u16 devid = pci_dev_id(pdev);
++	u32 i;
++
++	if (!brcmf_mac_efi_restore || !devinfo->ci ||
++	    devinfo->ci->chip != BRCM_CC_43602_CHIP_ID ||
++	    pdev->subsystem_vendor != PCI_VENDOR_ID_APPLE)
++		return;
++
++	for (i = 0; i < BRCMF_MAC_EFI_DEVS; i++)
++		if (brcmf_mac_efi[i].used && brcmf_mac_efi[i].devid == devid)
++			st = &brcmf_mac_efi[i];
++
++	brcmf_pcie_select_core(devinfo, BCMA_CORE_CHIPCOMMON);
++	if (before_reset && !st) {
++		/* First probe of this card since the module loaded: as EFI left it. */
++		for (i = 0; i < BRCMF_MAC_EFI_DEVS && brcmf_mac_efi[i].used; i++)
++			;
++		if (i == BRCMF_MAC_EFI_DEVS)
++			goto out;
++		st = &brcmf_mac_efi[i];
++		st->chipcontrol = READCC32(devinfo, chipcontrol);
++		st->gpioout = READCC32(devinfo, gpioout);
++		st->gpioouten = READCC32(devinfo, gpioouten);
++		st->gpiocontrol = READCC32(devinfo, gpiocontrol);
++		st->gpiopullup = READCC32(devinfo, gpiopullup);
++		st->gpiopulldown = READCC32(devinfo, gpiopulldown);
++		for (i = 0; i < BRCMF_MAC_EFI_CHIPCTL; i++) {
++			WRITECC32(devinfo, chipcontrol_addr, i);
++			st->chipctl[i] = READCC32(devinfo, chipcontrol_data);
++		}
++		st->devid = devid;
++		st->used = true;
++		brcmf_dbg(PCIE, "saved EFI setup: chipcontrol %08x gpioout %08x gpioouten %08x\n",
++			  st->chipcontrol, st->gpioout, st->gpioouten);
++	} else if (!before_reset && st && st->gpioouten &&
++		   (READCC32(devinfo, gpioouten) & st->gpioouten) != st->gpioouten) {
++		/* The chip lost power (resume): put EFI's setup back before the firmware runs. */
++		for (i = 0; i < BRCMF_MAC_EFI_CHIPCTL; i++) {
++			WRITECC32(devinfo, chipcontrol_addr, i);
++			WRITECC32(devinfo, chipcontrol_data, st->chipctl[i]);
++		}
++		WRITECC32(devinfo, chipcontrol, st->chipcontrol);
++		WRITECC32(devinfo, gpiopullup, st->gpiopullup);
++		WRITECC32(devinfo, gpiopulldown, st->gpiopulldown);
++		WRITECC32(devinfo, gpiocontrol, st->gpiocontrol);
++		/* set the levels before enabling the outputs */
++		WRITECC32(devinfo, gpioout, st->gpioout);
++		WRITECC32(devinfo, gpioouten, st->gpioouten);
++		dev_info(&pdev->dev, "restored the chip setup Apple's EFI did at boot\n");
++	}
++out:
++	brcmf_pcie_select_core(devinfo, BCMA_CORE_PCIE2);
++}
++
+ 
+ static void brcmf_pcie_reset_device(struct brcmf_pciedev_info *devinfo)
+ {
+@@ -1884,7 +1976,9 @@
+ 	u32 val, reg;
+ 
+ 	devinfo->ci = chip;
++	brcmf_pcie_mac_efi_save_or_restore(devinfo, true);
+ 	brcmf_pcie_reset_device(devinfo);
++	brcmf_pcie_mac_efi_save_or_restore(devinfo, false);
+ 
+ 	/* reginfo is not ready yet */
+ 	core = brcmf_chip_get_core(chip, BCMA_CORE_PCIE2);

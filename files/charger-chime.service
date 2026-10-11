@@ -1,0 +1,10 @@
+[Unit]
+Description=Chime when the charger is plugged in
+
+[Service]
+ExecStart=%h/.local/bin/charger-chime
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

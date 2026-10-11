@@ -1,0 +1,12 @@
+[Unit]
+# After a resume the light sensor can be missing for a moment while the T1 comes back: keep retrying.
+StartLimitIntervalSec=0
+Description=Screen brightness from the ambient light sensor
+
+[Service]
+ExecStart=/usr/local/sbin/screen-auto-brightness
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

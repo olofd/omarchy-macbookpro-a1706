@@ -1,0 +1,12 @@
+[Unit]
+# After a resume the light sensor can be missing for a moment while the T1 comes back: keep retrying.
+StartLimitIntervalSec=0
+Description=Keyboard backlight from the ambient light sensor
+
+[Service]
+ExecStart=/usr/local/sbin/kbd-auto-backlight
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+# Backups of the T1 firmware data are unique to one Mac and must never be committed.
+*.tgz
+*.tar
+*.tar.gz
+*.zip
+EMBEDDEDOS/
+FDRData
+*.memboot
+version.plist
+# Kernel module builds (dkms-build.sh, or patch/make by hand)
+brcmfmac-apple-resume/build/
+*.ko
+*.ko.zst
+*.o
+*.mod
+*.mod.c
+.*.cmd
+Module.symvers
+modules.order
+*.orig
+*.rej
+# Editors and tools
+*.swp
+*.swo
+*~
+__pycache__/
+.DS_Store
