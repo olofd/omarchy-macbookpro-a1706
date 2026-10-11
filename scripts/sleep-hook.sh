@@ -71,6 +71,13 @@ case "$1" in
     modprobe thunderbolt 2>/dev/null
     # Wi-Fi check and wake log, detached: a background child would be killed when the suspend service ends.
     systemd-run --no-block --collect --unit=wifi-recover /usr/local/sbin/wifi-recover >/dev/null 2>&1
+    # The Touch Bar renderer (t1bridge 0.1.12) stops calling its desktop provider after a wake, so the volume and
+    # brightness popups stop until it restarts. Restart it a few seconds after the wake, for each user running it.
+    for u in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $2}'); do
+      systemctl --user -M "$u@" is-active --quiet t1-touchbar.service 2>/dev/null &&
+        systemd-run --no-block --collect --on-active=3 --unit="t1-touchbar-restart-$u" \
+          systemctl --user -M "$u@" restart t1-touchbar.service >/dev/null 2>&1
+    done
     ;;
 esac
 exit 0

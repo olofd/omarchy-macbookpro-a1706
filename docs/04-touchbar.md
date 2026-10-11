@@ -43,7 +43,8 @@ What the script does, step by step, so you can follow it by hand:
 6. Enables the **renderer as a user service**. This is the step that is easy to forget: the hardware layer
    can report `touchbar: ready` while the Touch Bar stays black, because the thing that draws on it runs in
    your login session (`systemctl --user enable --now t1-touchbar.service`).
-7. Installs the Omarchy provider so the bar has volume, mute, media and brightness controls.
+7. Installs the Omarchy provider so the bar has volume, mute, media and brightness controls, and shows
+   Omarchy's level popup when you change the volume, screen brightness or keyboard light on the bar.
 
 ## Back up the result
 
@@ -61,6 +62,9 @@ Keep it **off the machine and out of git**: it holds data unique to this Mac. To
 - On kernel 6.19 and newer, two T2-oriented modules (`apple-ibridge-hid`, `apple-ib-touchbar`) can load by
   themselves and conflict with the older out-of-tree driver. They do not matter for t1bridge; if you use the
   older `apple-ibridge` DKMS setup instead, blacklist them.
+- **The popups stop after a sleep** (t1bridge 0.1.12): the renderer no longer calls the provider after a wake.
+  The sleep hook (chapter 5) restarts `t1-touchbar.service` 3 seconds after every wake. By hand:
+  `systemctl --user restart t1-touchbar.service`.
 - Touch ID needs t1bridge's fingerprint packages and a few PAM edits: see [09-touch-id.md](09-touch-id.md).
 - The **ambient light sensor** appears as an IIO device (`/sys/bus/iio/devices/iio:device0`, name `als`) once
   the T1 is running. See [07-light.md](07-light.md).
