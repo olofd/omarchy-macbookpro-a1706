@@ -30,7 +30,7 @@ case "$1" in
     # A Thunderbolt rescan from the last wake still running (lid closed again within ~10 s): let it finish, so the
     # controllers it brings back are removed below.
     i=0; while systemctl is-active --quiet mac-tb-rescan.service && [ $i -lt 30 ]; do sleep 0.5; i=$((i + 1)); done
-    # The T1 (iBridge, USB 05ac:8600) wakes the machine by itself a few seconds into s2idle (its wakeup source
+    # The T1 (iBridge, USB 05ac:8600) wakes the machine by itself a few seconds into sleep (its wakeup source
     # fired right at the wake). Keyboard, lid and power button still wake it.
     for d in /sys/bus/usb/devices/*; do
       [ "$(cat "$d/idVendor" 2>/dev/null)" = 05ac ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = 8600 ] &&

@@ -28,7 +28,7 @@ lid, and AirPods played cleanly again.
 
 ## The cause
 
-During s2idle the Wi-Fi chip **loses power**. At the resume the driver (`brcmf_pcie_pm_leave_D3()`) sees that
+During sleep (s2idle and deep alike) the Wi-Fi chip **loses power**. At the resume the driver (`brcmf_pcie_pm_leave_D3()`) sees that
 the firmware is gone (`intmask` reads 0), re-probes the card and downloads the firmware again. That re-probe is
 meant to be a cold start, and it nearly is, with one difference: at a real cold boot **Apple's EFI has already
 set part of the chip up** before Linux starts, and the 2015 firmware relies on that without ever doing it

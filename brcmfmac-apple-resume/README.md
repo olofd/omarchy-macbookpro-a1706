@@ -17,7 +17,7 @@ automatically for every new kernel.
   ```
 
   while 2.4 GHz networks connect. On 2.4 GHz, Bluetooth audio (e.g. AirPods) stutters.
-- **Sleep:** your Mac must already suspend and resume (s2idle). On the 2016/2017 Touch Bar models that needs
+- **Sleep:** your Mac must already suspend and resume (deep or s2idle). On the 2016/2017 Touch Bar models that needs
   the Thunderbolt hook from [chapter 5](../docs/05-sleep.md) of the guide.
 
 ## Install
@@ -57,7 +57,7 @@ then reboot.
 
 ## What the patch does
 
-During s2idle the BCM43602 **loses power**. At the resume the driver (`brcmf_pcie_pm_leave_D3()` in `pcie.c`)
+During sleep (deep or s2idle) the BCM43602 **loses power**. At the resume the driver (`brcmf_pcie_pm_leave_D3()` in `pcie.c`)
 finds the firmware gone (`intmask` reads 0), re-probes the card and downloads the firmware again, onto a chip at
 its power-on defaults. At a cold boot that is not what the firmware gets: **Apple's EFI has already set part of
 the chip up** before Linux runs, and the 2015 firmware (7.35.177.61, the only one there is) relies on it without

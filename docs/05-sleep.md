@@ -12,10 +12,9 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
 
 ## What was tried, in the order that found the cause
 
-1. **Use `s2idle` instead of `deep`.** `cat /sys/power/mem_sleep` shows `s2idle [deep]` by default.
-   `deep` (S3) never woke. `files/mem-sleep.conf` makes `s2idle` the default at boot
-   (`w /sys/power/mem_sleep - - - - s2idle` in `/etc/tmpfiles.d/`). This alone did **not** fix the hang, but it
-   is the mode that works with the fix below.
+1. **`s2idle` instead of `deep`** was the first try, because `deep` (S3) never woke. It did **not** fix the hang
+   either: both modes hang for the same reason (step 4). With that fixed, both work, and **`deep` is the one
+   to use** (see [Deep or s2idle](#deep-or-s2idle) below).
 2. **The NVMe fix Omarchy ships** (`d3cold_allowed=0` on the NVMe controller) is already applied by the
    installer for these models. Check: `cat /sys/bus/pci/devices/0000:01:00.0/d3cold_allowed` prints `0`.
 3. **Bisect with `pm_test`.** The kernel can run the suspend steps one at a time and resume by itself after
@@ -71,6 +70,31 @@ unload/reload, and stays dead until a reboot. See [06-wifi-after-sleep.md](06-wi
   here does it for suspend too.
 - `pm_test` blanks the screen during each test: run it over SSH, or wait for the screen to come back.
 - Re-test after kernel updates.
+
+## Deep or s2idle
+
+Both work with the hook. Measured on the MacBookPro13,2, unplugged, lid closed:
+
+| Mode | Battery used | Average |
+| --- | --- | --- |
+| `deep` (S3) | 5.6 % in 6.5 hours | 33 mA, about 0.9 % per hour: 4-5 days from full |
+| `s2idle` | 82 % → empty in under 10 hours | over 300 mA |
+
+These Macs have no low-power idle state (no ACPI LPS0 device; `/sys/devices/system/cpu/cpuidle/` has no
+`low_power_idle_*`), so in s2idle the machine stays about as warm as an idle laptop with the screen off.
+`files/mem-sleep.conf` therefore makes **`deep`** the default at boot (`w /sys/power/mem_sleep - - - - deep` in
+`/etc/tmpfiles.d/`). Check: `cat /sys/power/mem_sleep` shows `s2idle [deep]`.
+
+Deep needs one more thing, also in the hook: after an S3 wake the T1 is never told the Mac is awake, and the
+Touch Bar and Touch ID stay dark (everything reports ready). macOS and Windows call the ACPI method
+`\_SB.PCI0.XHC1.RHUB.ASOC.SOCW(1)` at wake; the hook does the same through the `acpi_call` module
+(`acpi_call-dkms`, installed by `install-sleep.sh`), and logs it: `journalctl -t mac-sleep` shows
+`T1 wake call SOCW(1): 0x0`. Found by a tester on a MacBookPro14,3,
+[t1bridge issue #18](https://github.com/standardagents/t1bridge/issues/18). **Never** call `ASOC.FRST`: it is
+an EC hard reset that leaves the T1 stuck in recovery mode.
+
+To go back to s2idle: `echo s2idle | sudo tee /sys/power/mem_sleep` (until the next boot), or change the line
+in `/etc/tmpfiles.d/mem-sleep.conf`.
 
 ## Hibernate
 

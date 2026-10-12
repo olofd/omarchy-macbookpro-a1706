@@ -1,6 +1,6 @@
 #!/bin/sh
 # 5 GHz Wi-Fi and Bluetooth after sleep (BCM43602): a patched brcmfmac driver, as a DKMS module that is rebuilt
-# for every new kernel. The chip loses power in s2idle, and the stock driver brings it back up without the setup
+# for every new kernel. The chip loses power in sleep, and the stock driver brings it back up without the setup
 # Apple's EFI did at boot (antenna/amplifier GPIOs); the patch restores it. See docs/06-wifi-after-sleep.md.
 #   sudo sh install-wifi-sleep-fix.sh            install (a few minutes the first time), then reboot
 #   sudo sh install-wifi-sleep-fix.sh remove     back to the kernel's own driver, then reboot
