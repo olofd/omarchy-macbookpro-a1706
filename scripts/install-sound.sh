@@ -44,8 +44,8 @@ if dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro.*: installed'; then
   dkms build "$DKMS_NAME" -k "$(uname -r)" --force
   dkms install "$DKMS_NAME" -k "$(uname -r)" --force
   echo "$WANT" > "$STAMP"
-  echo "The built-in mic's level now works: about 63 % is right (as yourself:"
-  echo "  pactl set-source-volume alsa_input.pci-0000_00_1f.3.analog-stereo 63%   after the reboot)."
+  echo "The built-in mic's level now works: about 85 % is right (as yourself:"
+  echo "  pactl set-source-volume alsa_input.pci-0000_00_1f.3.analog-stereo 85%   after the reboot)."
   needs_reboot "the patched sound driver"; exit 0
 fi
 

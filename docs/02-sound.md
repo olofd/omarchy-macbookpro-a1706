@@ -46,17 +46,19 @@ steps). It bypasses the mixer, so `Internal Mic Capture Volume` showed +12 dB wh
 [`snd-hda-macbookpro/0001-internal-mic-gain-from-mixer.patch`](../snd-hda-macbookpro/0001-internal-mic-gain-from-mixer.patch)
 makes the driver take the gain from the mixer control instead. `install-sound.sh` applies it to the driver's
 source (for a new install, and to a driver installed before), rebuilds it and records which patches the
-installed module has, so DKMS's rebuilds for new kernels keep it. It also sets the mic's starting level to 63 %
-(`files/wireplumber-internal-mic.conf`, only for this sound card): with the gain now real, PipeWire's usual
-100 % would clip. On a Mac set up before this fix, set the level once (63 % here, change to taste):
+installed module has, so DKMS's rebuilds for new kernels keep it. It also sets the mic's starting level to 85 %
+(`files/wireplumber-internal-mic.conf`, only for this sound card). On a Mac set up before this fix, set the
+level once (change to taste):
 
 ```sh
-pactl set-source-volume alsa_input.pci-0000_00_1f.3.analog-stereo 63%
+pactl set-source-volume alsa_input.pci-0000_00_1f.3.analog-stereo 85%
 ```
 
-**Result**, measured with a test tone played by the speakers and recorded by the mic, alternating the old and
-the new setting: **11 dB louder** at 63 % (-52.8 vs -41.8 dBFS), and each step of the mic slider now changes the
-level. The mic is digital, so the gain in the codec costs no quality compared with software gain.
+**Result.** The mic slider now changes the level: a test tone played by the speakers and recorded by the mic,
+alternating the old and the new setting, came in 11 dB louder at 63 % (-52.8 vs -41.8 dBFS). Dictating at a
+normal distance, speech peaked around -27 dBFS at 63 %, around -9 (highest -4, no clipping) at 100 %, and around
+-13 to -8 at **85 %**, the right range for calls and dictation; the signal-to-noise ratio stays about 26 dB (the
+mic is digital, so the gain in the codec adds no noise compared with software gain).
 
 **A thump at every recording start** (up to -0.5 dBFS in the first half second, about -8 dBFS since the fix)
 comes from the capture path powering up; it is not fixed yet. Tools that measure the level should skip the
