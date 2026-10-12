@@ -1,0 +1,1397 @@
+From 569e238fece690fa94b705cc26d6e97e9ecf52c4 Mon Sep 17 00:00:00 2001
+From: Olof Dahlbom <933408+olofd@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 22:57:50 +0200
+Subject: [PATCH] touchbar: sleep until input instead of polling; level sliders
+
+The built-in renderer's loop polled the hardware socket every 5 ms, waking
+the CPU about 200 times a second while the bar sat idle. It now sleeps in
+poll(2) until a packet arrives, its next timer is due (overlay fade,
+enrollment progress, hold-to-repeat) or a background thread has news: the
+desktop provider and overlay watcher wake it through a local socket pair.
+Idle, the main thread wakes once a second (the provider's status).
+t1_seqpacket_wait_readable() and SeqPacketClient::wait_readable() add the
+blocking wait; without a wake channel the loop keeps its old polling.
+
+Sliding a finger on the volume, display brightness or keyboard backlight
+controls turns the bar into one wide slider for that level, which follows
+the finger relative to where it started and stays 1.5 s after it lifts.
+Volume goes through the desktop provider as before; brightness and
+backlight use SetDisplayBrightness / SetKeyboardBacklight, one request at
+a time with only the newest level waiting, and the level popup is shown
+once after the last. The starting level is read with
+SystemBrightnessControls::current_percentage().
+
+Tested on a MacBookPro13,2 (t1bridge 0.1.12, Omarchy, kernel 7.2.5).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/t1-daemons/c/t1_seqpacket.c          |  37 +++
+ crates/t1-daemons/c/t1_seqpacket.h          |  13 +
+ crates/t1-daemons/c/test_t1_seqpacket.c     |  44 +++
+ crates/t1-platform/src/ffi.rs               |  16 +
+ crates/t1-platform/src/seqpacket.rs         |  41 +++
+ crates/t1-platform/src/system_brightness.rs |  42 +++
+ crates/t1-touchbar/Cargo.toml               |   2 +-
+ crates/t1-touchbar/src/builtin_renderer.rs  | 343 ++++++++++++++++++--
+ crates/t1-touchbar/src/desktop_provider.rs  |  21 +-
+ crates/t1-touchbar/src/lib.rs               |   2 +
+ crates/t1-touchbar/src/overlay_state.rs     |  21 +-
+ crates/t1-touchbar/src/slider.rs            | 162 +++++++++
+ crates/t1-touchbar/src/stock_slice.rs       |  97 ++++++
+ crates/t1-touchbar/src/wake.rs              |  72 ++++
+ 14 files changed, 888 insertions(+), 25 deletions(-)
+ create mode 100644 crates/t1-touchbar/src/slider.rs
+ create mode 100644 crates/t1-touchbar/src/wake.rs
+
+diff --git a/crates/t1-daemons/c/t1_seqpacket.c b/crates/t1-daemons/c/t1_seqpacket.c
+index 7957bda..f83ed91 100644
+--- a/crates/t1-daemons/c/t1_seqpacket.c
++++ b/crates/t1-daemons/c/t1_seqpacket.c
+@@ -495,6 +495,43 @@ enum t1_seqpacket_status t1_seqpacket_peer_closed(int client_descriptor,
+ 	return T1_SEQPACKET_OK;
+ }
+ 
++enum t1_seqpacket_status t1_seqpacket_wait_readable(int client_descriptor,
++	int wake_descriptor, int timeout_ms, int *ready)
++{
++	enum t1_seqpacket_status status;
++	struct pollfd descriptors[2];
++	nfds_t count = 1;
++	int result;
++
++	if (ready == NULL || timeout_ms < -1)
++		return T1_SEQPACKET_INVALID_ARGUMENT;
++	*ready = 0;
++	status = validate_client(client_descriptor);
++	if (status != T1_SEQPACKET_OK)
++		return status;
++	memset(descriptors, 0, sizeof(descriptors));
++	descriptors[0].fd = client_descriptor;
++	descriptors[0].events = POLLIN;
++	if (wake_descriptor >= 0) {
++		descriptors[1].fd = wake_descriptor;
++		descriptors[1].events = POLLIN;
++		count = 2;
++	}
++	result = poll(descriptors, count, timeout_ms);
++	if (result < 0)
++		return transient_status(errno, T1_SEQPACKET_READINESS_FAILED);
++	if ((descriptors[0].revents & POLLNVAL) != 0 ||
++	    (count == 2 && (descriptors[1].revents & POLLNVAL) != 0))
++		return T1_SEQPACKET_READINESS_FAILED;
++	/* A hangup or error is reported as ready: the next receive returns it. */
++	if ((descriptors[0].revents & (POLLIN | POLLHUP | POLLERR)) != 0)
++		*ready |= T1_SEQPACKET_READY_CLIENT;
++	if (count == 2 &&
++	    (descriptors[1].revents & (POLLIN | POLLHUP | POLLERR)) != 0)
++		*ready |= T1_SEQPACKET_READY_WAKE;
++	return T1_SEQPACKET_OK;
++}
++
+ static void close_descriptors(int *descriptors, size_t descriptor_count)
+ {
+ 	size_t index;
+diff --git a/crates/t1-daemons/c/t1_seqpacket.h b/crates/t1-daemons/c/t1_seqpacket.h
+index bbf979e..620990c 100644
+--- a/crates/t1-daemons/c/t1_seqpacket.h
++++ b/crates/t1-daemons/c/t1_seqpacket.h
+@@ -121,6 +121,19 @@ enum t1_seqpacket_status t1_seqpacket_peer_in_group(
+ enum t1_seqpacket_status t1_seqpacket_peer_closed(int client_descriptor,
+ 	int *peer_closed);
+ 
++#define T1_SEQPACKET_READY_CLIENT 1
++#define T1_SEQPACKET_READY_WAKE 2
++
++/*
++ * Block until the connected client has a packet or a hangup to report, the
++ * optional wake descriptor (-1 for none) is readable, or timeout_ms passes
++ * (-1 waits indefinitely). *ready receives T1_SEQPACKET_READY_CLIENT and/or
++ * T1_SEQPACKET_READY_WAKE; zero means the timeout passed. Nothing is
++ * consumed: the caller receives the packet and drains the wake descriptor.
++ */
++enum t1_seqpacket_status t1_seqpacket_wait_readable(int client_descriptor,
++	int wake_descriptor, int timeout_ms, int *ready);
++
+ /*
+  * Receive one complete packet without blocking. A packet larger than capacity
+  * is rejected as truncated; its prefix must not be interpreted by the caller.
+diff --git a/crates/t1-daemons/c/test_t1_seqpacket.c b/crates/t1-daemons/c/test_t1_seqpacket.c
+index e64714c..3694f48 100644
+--- a/crates/t1-daemons/c/test_t1_seqpacket.c
++++ b/crates/t1-daemons/c/test_t1_seqpacket.c
+@@ -984,6 +984,49 @@ static void test_peer_group_admission_bounds_and_validates_kernel_results(void)
+ 	close_descriptor(descriptors[1]);
+ }
+ 
++static void test_wait_readable_reports_packets_wakes_hangups_and_timeouts(void)
++{
++	static const uint8_t packet[] = { 0x54, 0x31, 0x57, 0x52 };
++	int descriptors[2] = { -1, -1 };
++	int wake[2] = { -1, -1 };
++	int ready = 99;
++	uint8_t buffer[sizeof(packet)] = { 0 };
++	size_t length = 0;
++
++	create_pair(descriptors);
++	EXPECT_TRUE(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, wake) == 0);
++	EXPECT_STATUS(T1_SEQPACKET_OK,
++		      t1_seqpacket_wait_readable(descriptors[0], wake[0], 0, &ready));
++	EXPECT_TRUE(ready == 0);
++	EXPECT_TRUE(write(wake[1], "w", 1) == 1);
++	EXPECT_STATUS(T1_SEQPACKET_OK,
++		      t1_seqpacket_wait_readable(descriptors[0], wake[0], -1, &ready));
++	EXPECT_TRUE(ready == T1_SEQPACKET_READY_WAKE);
++	EXPECT_TRUE(send(descriptors[1], packet, sizeof(packet), MSG_NOSIGNAL) ==
++		    (ssize_t)sizeof(packet));
++	EXPECT_STATUS(T1_SEQPACKET_OK,
++		      t1_seqpacket_wait_readable(descriptors[0], -1, -1, &ready));
++	EXPECT_TRUE(ready == T1_SEQPACKET_READY_CLIENT);
++	EXPECT_STATUS(T1_SEQPACKET_OK,
++		      t1_seqpacket_wait_readable(descriptors[0], wake[0], 0, &ready));
++	EXPECT_TRUE(ready == (T1_SEQPACKET_READY_CLIENT | T1_SEQPACKET_READY_WAKE));
++	EXPECT_STATUS(T1_SEQPACKET_OK,
++		      t1_seqpacket_receive(descriptors[0], buffer, sizeof(buffer),
++				       &length));
++	EXPECT_TRUE(length == sizeof(packet));
++	close_descriptor(descriptors[1]);
++	EXPECT_STATUS(T1_SEQPACKET_OK,
++		      t1_seqpacket_wait_readable(descriptors[0], -1, 0, &ready));
++	EXPECT_TRUE(ready == T1_SEQPACKET_READY_CLIENT);
++	EXPECT_STATUS(T1_SEQPACKET_INVALID_ARGUMENT,
++		      t1_seqpacket_wait_readable(descriptors[0], -1, -2, &ready));
++	EXPECT_STATUS(T1_SEQPACKET_INVALID_ARGUMENT,
++		      t1_seqpacket_wait_readable(descriptors[0], -1, 0, NULL));
++	close_descriptor(descriptors[0]);
++	close_descriptor(wake[0]);
++	close_descriptor(wake[1]);
++}
++
+ static void test_disconnect_probe_is_non_consuming_and_fail_closed(void)
+ {
+ 	static const uint8_t packet[] = { 0x54, 0x31, 0x41, 0x55 };
+@@ -1594,6 +1637,7 @@ int main(void)
+ 	test_kernel_peer_credentials();
+ 	test_peer_group_admission_uses_kernel_primary_and_supplementary();
+ 	test_peer_group_admission_bounds_and_validates_kernel_results();
++	test_wait_readable_reports_packets_wakes_hangups_and_timeouts();
+ 	test_disconnect_probe_is_non_consuming_and_fail_closed();
+ 	test_packet_boundaries_and_truncation();
+ 	test_ancillary_rights_are_rejected_without_fd_leak();
+diff --git a/crates/t1-platform/src/ffi.rs b/crates/t1-platform/src/ffi.rs
+index c1a679a..d29bb4a 100644
+--- a/crates/t1-platform/src/ffi.rs
++++ b/crates/t1-platform/src/ffi.rs
+@@ -322,6 +322,13 @@ unsafe extern "C" {
+     #[cfg(feature = "seqpacket")]
+     fn t1_seqpacket_listener_ready(listener_descriptor: c_int, ready: *mut c_int) -> c_int;
+     #[cfg(feature = "seqpacket")]
++    fn t1_seqpacket_wait_readable(
++        client_descriptor: c_int,
++        wake_descriptor: c_int,
++        timeout_ms: c_int,
++        ready: *mut c_int,
++    ) -> c_int;
++    #[cfg(feature = "seqpacket")]
+     fn t1_seqpacket_accept(listener_descriptor: c_int, client_descriptor: *mut c_int) -> c_int;
+     #[cfg(feature = "seqpacket")]
+     fn t1_seqpacket_connect_touchbar(client_descriptor: *mut c_int) -> c_int;
+@@ -1352,6 +1359,15 @@ pub(super) fn adopt_systemd_listener_pair(
+     (status, owned)
+ }
+ 
++#[cfg(feature = "seqpacket")]
++pub(super) fn wait_readable(client: RawFd, wake: RawFd, timeout_ms: c_int) -> (c_int, c_int) {
++    let mut ready = 0;
++    // SAFETY: `ready` is writable for one C `int`; the caller keeps the
++    // borrowed client (and the wake descriptor, if not -1) open for the wait.
++    let status = unsafe { t1_seqpacket_wait_readable(client, wake, timeout_ms, &raw mut ready) };
++    (status, ready)
++}
++
+ #[cfg(feature = "seqpacket")]
+ pub(super) fn listener_ready(listener: RawFd) -> (c_int, bool) {
+     let mut ready = 0;
+diff --git a/crates/t1-platform/src/seqpacket.rs b/crates/t1-platform/src/seqpacket.rs
+index 8ce6a4b..b9aa68c 100644
+--- a/crates/t1-platform/src/seqpacket.rs
++++ b/crates/t1-platform/src/seqpacket.rs
+@@ -4,9 +4,23 @@ use std::ffi::CStr;
+ use std::fmt;
+ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+ use std::sync::atomic::{AtomicBool, Ordering};
++use std::time::Duration;
+ 
+ use crate::ffi;
+ 
++const READY_CLIENT: std::ffi::c_int = 1;
++const READY_WAKE: std::ffi::c_int = 2;
++
++/// What [`SeqPacketClient::wait_readable`] found ready; both false means the
++/// timeout passed.
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
++pub struct Readiness {
++    /// The client has a packet, or a hangup, to receive.
++    pub client: bool,
++    /// The wake descriptor is readable.
++    pub wake: bool,
++}
++
+ /// Kernel-supplied identity for one connected local peer.
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ #[allow(clippy::struct_field_names)]
+@@ -365,6 +379,33 @@ impl<'fd> SeqPacketClient<'fd> {
+         Ok(peer_closed)
+     }
+ 
++    /// Blocks until this client has a packet (or a hangup) to receive, `wake`
++    /// is readable, or `timeout` passes; `None` waits indefinitely. Nothing is
++    /// consumed: receive the packet, and drain `wake`, afterwards. The timeout
++    /// is rounded up to whole milliseconds, so a deadline is never woken early.
++    ///
++    /// # Errors
++    ///
++    /// Returns a static error for an invalid socket, interruption, or a failed
++    /// wait.
++    pub fn wait_readable(
++        self,
++        wake: Option<BorrowedFd<'_>>,
++        timeout: Option<Duration>,
++    ) -> Result<Readiness, SeqPacketError> {
++        let timeout_ms = timeout.map_or(-1, |timeout| {
++            let millis = timeout.as_nanos().div_ceil(1_000_000);
++            std::ffi::c_int::try_from(millis).unwrap_or(std::ffi::c_int::MAX)
++        });
++        let wake = wake.map_or(-1, |wake| wake.as_raw_fd());
++        let (status, ready) = ffi::wait_readable(self.descriptor.as_raw_fd(), wake, timeout_ms);
++        check(status)?;
++        Ok(Readiness {
++            client: ready & READY_CLIENT != 0,
++            wake: ready & READY_WAKE != 0,
++        })
++    }
++
+     /// Receives one complete packet without blocking.
+     ///
+     /// # Errors
+diff --git a/crates/t1-platform/src/system_brightness.rs b/crates/t1-platform/src/system_brightness.rs
+index 23e9591..7a5ef8b 100644
+--- a/crates/t1-platform/src/system_brightness.rs
++++ b/crates/t1-platform/src/system_brightness.rs
+@@ -176,6 +176,23 @@ impl SystemBrightnessControls {
+         })
+     }
+ 
++    /// Reads the current level as a percentage of the maximum, for a renderer
++    /// that shows it (the volume-style slider). Writes stay with the service.
++    ///
++    /// # Errors
++    ///
++    /// Returns a static category when the class or current value is invalid.
++    pub fn current_percentage(&self, kind: BrightnessKind) -> Result<u8, BrightnessError> {
++        let device = self.device(kind)?;
++        let current = read_attribute(&device.brightness_path)?;
++        if current > device.maximum || device.maximum == 0 {
++            return Err(BrightnessError::InvalidAttribute);
++        }
++        let percentage =
++            (u64::from(current) * 100 + u64::from(device.maximum) / 2) / u64::from(device.maximum);
++        u8::try_from(percentage).map_err(|_| BrightnessError::InvalidAttribute)
++    }
++
+     /// Stops advertising one class after logind rejects its admitted-session write.
+     pub fn disable(&mut self, kind: BrightnessKind) {
+         match kind {
+@@ -403,6 +420,31 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn current_percentage_reads_the_live_value() {
++        let tree = TestTree::new();
++        let displays = tree.class("backlight");
++        let leds = tree.class("leds");
++        let display = add_device(&displays, "display-device", "90\n");
++        let controls = SystemBrightnessControls::discover_in(&displays, &leds);
++        fs::write(display.join("brightness"), "45\n").unwrap();
++        assert_eq!(controls.current_percentage(BrightnessKind::Display), Ok(50));
++        fs::write(display.join("brightness"), "90\n").unwrap();
++        assert_eq!(
++            controls.current_percentage(BrightnessKind::Display),
++            Ok(100)
++        );
++        fs::write(display.join("brightness"), "91\n").unwrap();
++        assert_eq!(
++            controls.current_percentage(BrightnessKind::Display),
++            Err(BrightnessError::InvalidAttribute)
++        );
++        assert_eq!(
++            controls.current_percentage(BrightnessKind::Keyboard),
++            Err(BrightnessError::Unavailable)
++        );
++    }
++
+     #[test]
+     fn relative_steps_reject_malformed_or_out_of_range_live_values() {
+         let tree = TestTree::new();
+diff --git a/crates/t1-touchbar/Cargo.toml b/crates/t1-touchbar/Cargo.toml
+index 32669af..9f10836 100644
+--- a/crates/t1-touchbar/Cargo.toml
++++ b/crates/t1-touchbar/Cargo.toml
+@@ -20,7 +20,7 @@ path = "tests/desktop_provider.rs"
+ required-features = ["provider-test-fixture"]
+ 
+ [dependencies]
+-t1-platform = { path = "../t1-platform", version = "=0.0.0", default-features = false, features = ["frame-memfd", "seqpacket"] }
++t1-platform = { path = "../t1-platform", version = "=0.0.0", default-features = false, features = ["frame-memfd", "seqpacket", "system-brightness"] }
+ t1-touchbar-hw = { path = "../t1-touchbar-hw", version = "=0.0.0", default-features = false }
+ 
+ [lints]
+diff --git a/crates/t1-touchbar/src/builtin_renderer.rs b/crates/t1-touchbar/src/builtin_renderer.rs
+index 90cead9..e56d5ae 100644
+--- a/crates/t1-touchbar/src/builtin_renderer.rs
++++ b/crates/t1-touchbar/src/builtin_renderer.rs
+@@ -10,22 +10,25 @@ use std::time::{Duration, Instant};
+ use t1_platform::diagnostics::{Component, Outcome, Record, Stage, emit};
+ use t1_platform::frame_memfd::RendererFrame;
+ use t1_platform::seqpacket::{self, SeqPacketClient, SeqPacketError};
++use t1_platform::system_brightness::{BrightnessKind, SystemBrightnessControls};
+ use t1_touchbar_hw::digitizer::DisplayDimensions;
+ use t1_touchbar_hw::packet::MAX_PACKET_LENGTH;
+ use t1_touchbar_hw::wire::{
+     self, AncillaryMetadata, ClientMessage, Envelope, ErrorCode, FeatureBits, Hello, HelloAck,
+-    InputContact, KeyCode, RegisterBuffer, ServiceMessage, StepDirection as WireStepDirection,
+-    SubmitFrame, TapKeys, WireInputFrame,
++    InputContact, KeyCode, Percentage, RegisterBuffer, ServiceMessage,
++    StepDirection as WireStepDirection, SubmitFrame, TapKeys, WireInputFrame,
+ };
+ 
+ use crate::desktop_provider::{DesktopAction, DesktopCapabilities, DesktopProvider, DesktopState};
+ use crate::framebuffer::Xrgb8888Frame;
+ use crate::gesture::{DisplayContact, GestureEngine, GestureSettings};
+ use crate::overlay_state::{OverlayState, OverlayWatcher};
++use crate::slider::{DragInput, LevelSlider, SliderTarget};
+ use crate::stock_slice::{
+     FunctionKey, StepDirection, StockAction, StockBar, StockCapabilities, StockLevels,
+ };
+ use crate::touch_id_overlay::TouchIdOverlay;
++use crate::wake::{self, WakeReceiver, Waker};
+ 
+ const BUFFER_ID: u32 = 1;
+ const FIRST_FRAME_ID: u64 = 1;
+@@ -33,6 +36,8 @@ const MAX_PENDING_REQUESTS: usize = 64;
+ const SEND_ATTEMPTS: usize = 64;
+ const SEND_RETRY_DELAY: Duration = Duration::from_millis(2);
+ const RECEIVE_RETRY_DELAY: Duration = Duration::from_millis(5);
++/// Step of a running animation (overlay fade, enrollment progress): 60 per second.
++const ANIMATION_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+ const INITIAL_RECONNECT_DELAY: Duration = Duration::from_millis(50);
+ const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(2);
+ const VOLUME_STEP_PERCENT: u8 = 6;
+@@ -71,13 +76,19 @@ impl std::error::Error for BuiltinRendererError {}
+ 
+ /// Runs the built-in renderer and reconnects forever with capped backoff.
+ pub fn run_forever(provider_path: Option<&Path>) {
+-    let provider = provider_path.and_then(DesktopProvider::start);
++    // Without the wake channel the loop falls back to polling every few milliseconds.
++    let (waker, wake_receiver) = match wake::pair() {
++        Ok((waker, receiver)) => (Some(waker), Some(receiver)),
++        Err(_) => (None, None),
++    };
++    let provider =
++        provider_path.and_then(|path| DesktopProvider::start_with_waker(path, waker.clone()));
+     let mut delay = INITIAL_RECONNECT_DELAY;
+     loop {
+         if let Err(error) = t1_platform::diagnostics::observe(
+             t1_platform::diagnostics::Component::Renderer,
+             t1_platform::diagnostics::Stage::RendererConnect,
+-            || run_once(provider.as_ref()),
++            || run_once(provider.as_ref(), waker.as_ref(), wake_receiver.as_ref()),
+         ) {
+             eprintln!("t1-touchbar: {error}; reconnecting");
+         }
+@@ -90,7 +101,11 @@ fn next_reconnect_delay(delay: Duration) -> Duration {
+     delay.saturating_mul(2).min(MAX_RECONNECT_DELAY)
+ }
+ 
+-fn run_once(provider: Option<&DesktopProvider>) -> Result<(), BuiltinRendererError> {
++fn run_once(
++    provider: Option<&DesktopProvider>,
++    waker: Option<&Waker>,
++    wake_receiver: Option<&WakeReceiver>,
++) -> Result<(), BuiltinRendererError> {
+     let NegotiatedConnection {
+         mut connection,
+         request_ids,
+@@ -105,7 +120,7 @@ fn run_once(provider: Option<&DesktopProvider>) -> Result<(), BuiltinRendererErr
+         stock_capabilities(features, ack.minor),
+     )?;
+     session.register(&connection)?;
+-    let overlay_watcher = OverlayWatcher::start();
++    let overlay_watcher = OverlayWatcher::start_with_waker(waker.cloned());
+     let clock = Instant::now();
+ 
+     loop {
+@@ -124,8 +139,28 @@ fn run_once(provider: Option<&DesktopProvider>) -> Result<(), BuiltinRendererErr
+         }
+         if let Some(envelope) = connection.try_receive_service(Some(dimensions))? {
+             session.handle_with_provider(envelope, &connection, provider)?;
+-        } else {
+-            thread::sleep(RECEIVE_RETRY_DELAY);
++            // Handle everything already queued before waiting again.
++            continue;
++        }
++        // Sleep until input, the session's next timer, or news from a background
++        // thread, instead of polling: an idle bar then costs no wakeups at all.
++        let timeout = match wake_receiver {
++            Some(_) => session.next_wakeup(clock.elapsed()),
++            None => Some(RECEIVE_RETRY_DELAY),
++        };
++        match connection
++            .client()
++            .wait_readable(wake_receiver.map(AsFd::as_fd), timeout)
++        {
++            Ok(ready) => {
++                if ready.wake
++                    && let Some(receiver) = wake_receiver
++                {
++                    receiver.drain();
++                }
++            }
++            Err(SeqPacketError::Interrupted) => {}
++            Err(_) => return Err(BuiltinRendererError::Transport),
+         }
+     }
+ }
+@@ -317,10 +352,23 @@ fn dispatch_desktop(provider: Option<&DesktopProvider>, action: DesktopAction) {
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ enum PendingRequest {
+     Register,
+-    Submit { frame_id: u64 },
++    Submit {
++        frame_id: u64,
++    },
+     TapKeys,
+     CancelTouchId,
+     HardwareAction(Option<DesktopAction>),
++    /// A level a slider set: brightness or keyboard backlight.
++    SliderLevel,
++}
++
++/// Brightness and backlight levels a slider sends: one request at a time, the
++/// newest level waiting behind it, and the level popup shown after the last.
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
++struct SliderRequests {
++    in_flight: bool,
++    pending: Option<(SliderTarget, u8)>,
++    feedback: Option<DesktopAction>,
+ }
+ 
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+@@ -352,6 +400,10 @@ struct RendererSession {
+     enrollment_progress_target: u16,
+     enrollment_progress_last_update: Duration,
+     now: Duration,
++    slider: Option<LevelSlider>,
++    /// Reads the brightness levels a slider starts from; writes go through the service.
++    brightness: SystemBrightnessControls,
++    slider_requests: SliderRequests,
+     input: InputInterpreter,
+     frame: RendererFrame,
+     registered: bool,
+@@ -403,6 +455,9 @@ impl RendererSession {
+             enrollment_progress_target: 0,
+             enrollment_progress_last_update: Duration::ZERO,
+             now: Duration::ZERO,
++            slider: None,
++            brightness: SystemBrightnessControls::discover(),
++            slider_requests: SliderRequests::default(),
+             input,
+             frame,
+             registered: false,
+@@ -472,8 +527,20 @@ impl RendererSession {
+                 }
+                 let outcome = self.observe_input(frame)?;
+                 self.dirty |= outcome.redraw;
+-                for action in outcome.actions {
+-                    self.dispatch(action, connection, provider)?;
++                let slider_shown = self.slider.is_some();
++                for drag in outcome.drags {
++                    self.slide(drag, connection, provider)?;
++                }
++                // While the slider covers the bar, a tap on it only puts the bar back.
++                if slider_shown && !outcome.actions.is_empty() {
++                    if self.slider.is_some_and(|slider| !slider.dragging()) {
++                        self.slider = None;
++                        self.dirty = true;
++                    }
++                } else {
++                    for action in outcome.actions {
++                        self.dispatch(action, connection, provider)?;
++                    }
+                 }
+                 if outcome.cancel_touch_id {
+                     self.send_cancel_touch_id(connection)?;
+@@ -526,6 +593,7 @@ impl RendererSession {
+                 Ok(())
+             }
+             PendingRequest::TapKeys => Ok(()),
++            PendingRequest::SliderLevel => self.slider_level_done(connection, provider),
+             PendingRequest::Register => Err(BuiltinRendererError::Protocol),
+         }
+     }
+@@ -534,7 +602,7 @@ impl RendererSession {
+         &mut self,
+         request_id: u32,
+         _code: ErrorCode,
+-        _connection: &HardwareConnection,
++        connection: &HardwareConnection,
+     ) -> Result<(), BuiltinRendererError> {
+         let pending = self
+             .pending
+@@ -555,6 +623,11 @@ impl RendererSession {
+                 eprintln!("t1-touchbar: typed action was rejected");
+                 Ok(())
+             }
++            PendingRequest::SliderLevel => {
++                eprintln!("t1-touchbar: slider level was rejected");
++                self.slider_requests.feedback = None;
++                self.slider_level_done(connection, None)
++            }
+             PendingRequest::Register | PendingRequest::Submit { .. } => {
+                 Err(BuiltinRendererError::ServiceRejected)
+             }
+@@ -753,9 +826,21 @@ impl RendererSession {
+         )
+         .map_err(|_| BuiltinRendererError::Frame)?;
+         let fn_visible = self.input.fn_pressed() && self.overlay_visual_state.is_none();
+-        self.stock
+-            .render_pressed(&mut frame, fn_visible, self.levels, self.input.pressed())
+-            .map_err(|_| BuiltinRendererError::Frame)?;
++        match self.slider {
++            Some(slider) if !fn_visible && self.overlay_visual_state.is_none() => {
++                self.stock.render_slider(
++                    &mut frame,
++                    slider.target(),
++                    slider.level(),
++                    self.levels.muted,
++                )
++            }
++            _ => {
++                self.stock
++                    .render_pressed(&mut frame, fn_visible, self.levels, self.input.pressed())
++            }
++        }
++        .map_err(|_| BuiltinRendererError::Frame)?;
+         if self.overlay_opacity > 0 {
+             let left = self.stock.escape_right();
+             if left < self.dimensions.width() {
+@@ -830,6 +915,10 @@ impl RendererSession {
+         provider: Option<&DesktopProvider>,
+     ) -> Result<(), BuiltinRendererError> {
+         self.now = now;
++        if self.slider.is_some_and(|slider| slider.expired(now)) {
++            self.slider = None;
++            self.dirty = true;
++        }
+         self.advance_overlay_fade(now);
+         self.advance_enrollment_progress(now);
+         if !self.display_off
+@@ -841,6 +930,158 @@ impl RendererSession {
+         self.submit_if_ready(connection)
+     }
+ 
++    /// Drives the level sliders: a drag that starts on the volume, display
++    /// brightness or keyboard backlight controls (or on the shown slider) sets
++    /// that level as the finger moves.
++    fn slide(
++        &mut self,
++        drag: DragInput,
++        connection: &HardwareConnection,
++        provider: Option<&DesktopProvider>,
++    ) -> Result<(), BuiltinRendererError> {
++        self.dirty = true;
++        match drag {
++            DragInput::Start { x, target } => {
++                if let Some(slider) = self.slider.as_mut() {
++                    slider.regrab(x);
++                } else if let Some(target) = target
++                    && let Some(level) = self.slider_start_level(target)
++                {
++                    self.slider = Some(LevelSlider::start(target, level, x));
++                }
++                Ok(())
++            }
++            DragInput::Move { x } => {
++                let track = self.stock.slider_track().width;
++                let Some(slider) = self.slider.as_mut() else {
++                    return Ok(());
++                };
++                let target = slider.target();
++                let Some(level) = slider.drag_to(x, track) else {
++                    return Ok(());
++                };
++                if target == SliderTarget::Volume {
++                    self.levels.volume = Some(level);
++                    self.levels.muted = false;
++                    dispatch_desktop(provider, DesktopAction::SetVolume(level));
++                    return Ok(());
++                }
++                self.request_slider_level(target, level, connection)
++            }
++            DragInput::End => {
++                let Some(slider) = self.slider.as_mut() else {
++                    return Ok(());
++                };
++                slider.release(self.now);
++                let feedback = match slider.target() {
++                    SliderTarget::Volume => None,
++                    SliderTarget::DisplayBrightness => Some(DesktopAction::ShowDisplayBrightness),
++                    SliderTarget::KeyboardBacklight => Some(DesktopAction::ShowKeyboardBacklight),
++                }
++                .filter(|_| {
++                    self.desktop_state
++                        .capabilities
++                        .contains(DesktopCapabilities::LEVEL_FEEDBACK)
++                });
++                // The popup reads the level back: show it once the last request has landed.
++                if self.slider_requests.in_flight {
++                    self.slider_requests.feedback = feedback;
++                } else if let Some(feedback) = feedback {
++                    dispatch_desktop(provider, feedback);
++                }
++                Ok(())
++            }
++        }
++    }
++
++    /// The level a slider for `target` starts from, if the bar has that control.
++    fn slider_start_level(&self, target: SliderTarget) -> Option<u8> {
++        match target {
++            SliderTarget::Volume => self.levels.volume,
++            SliderTarget::DisplayBrightness => self
++                .hardware_capabilities
++                .contains(StockCapabilities::DISPLAY_BRIGHTNESS)
++                .then(|| {
++                    self.brightness
++                        .current_percentage(BrightnessKind::Display)
++                        .ok()
++                })
++                .flatten(),
++            SliderTarget::KeyboardBacklight => self
++                .hardware_capabilities
++                .contains(StockCapabilities::KEYBOARD_BACKLIGHT)
++                .then(|| {
++                    self.brightness
++                        .current_percentage(BrightnessKind::Keyboard)
++                        .ok()
++                })
++                .flatten(),
++        }
++    }
++
++    /// Sends a slider's brightness or backlight level to the service, one
++    /// request at a time: while one is unanswered only the newest level waits.
++    fn request_slider_level(
++        &mut self,
++        target: SliderTarget,
++        level: u8,
++        connection: &HardwareConnection,
++    ) -> Result<(), BuiltinRendererError> {
++        if self.slider_requests.in_flight {
++            self.slider_requests.pending = Some((target, level));
++            return Ok(());
++        }
++        let percentage = Percentage::new(level).map_err(|_| BuiltinRendererError::Protocol)?;
++        let message = match target {
++            SliderTarget::DisplayBrightness => ClientMessage::SetDisplayBrightness(percentage),
++            SliderTarget::KeyboardBacklight => ClientMessage::SetKeyboardBacklight(percentage),
++            SliderTarget::Volume => return Ok(()),
++        };
++        let request_id = self.allocate_request(PendingRequest::SliderLevel)?;
++        let envelope = Envelope {
++            request_id,
++            message,
++        };
++        if let Err(error) = connection.send_request(&envelope, Some(self.dimensions), None) {
++            self.pending.remove(&request_id);
++            return Err(error);
++        }
++        self.slider_requests.in_flight = true;
++        Ok(())
++    }
++
++    /// A slider level request was answered: send the level that waited, or
++    /// show the popup the release asked for.
++    fn slider_level_done(
++        &mut self,
++        connection: &HardwareConnection,
++        provider: Option<&DesktopProvider>,
++    ) -> Result<(), BuiltinRendererError> {
++        self.slider_requests.in_flight = false;
++        if let Some((target, level)) = self.slider_requests.pending.take() {
++            return self.request_slider_level(target, level, connection);
++        }
++        if let Some(feedback) = self.slider_requests.feedback.take() {
++            dispatch_desktop(provider, feedback);
++        }
++        Ok(())
++    }
++
++    /// How long the loop may wait before [`Self::advance`] has work: until the
++    /// next animation step or hold repeat, or `None` while nothing is timed.
++    fn next_wakeup(&self, now: Duration) -> Option<Duration> {
++        let animating = self.overlay_opacity != self.overlay_target_opacity
++            || self.enrollment_progress_visual != self.enrollment_progress_target;
++        let animation = animating.then_some(ANIMATION_FRAME_INTERVAL);
++        let repeat = if self.display_off || self.input.wait_for_touch_release {
++            None
++        } else {
++            self.input.repeat_due_in(now)
++        };
++        let slider = self.slider.and_then(|slider| slider.hides_in(now));
++        [animation, repeat, slider].into_iter().flatten().min()
++    }
++
+     fn advance_overlay_fade(&mut self, now: Duration) {
+         if self.overlay_opacity == self.overlay_target_opacity {
+             return;
+@@ -895,11 +1136,16 @@ impl RendererSession {
+             self.display_off = state.display_off;
+             if self.display_off {
+                 self.input.cancel_touches();
++                self.slider = None;
+             }
+             self.dirty = true;
+         }
+         if self.desktop_state == state && self.pending_desktop_state.is_none() {
+-            if self.levels.volume != state.volume || self.levels.muted != state.muted {
++            // The slider shows the level the finger set until it hides; a status
++            // read before that volume change landed would make it jump back.
++            if self.slider.is_none()
++                && (self.levels.volume != state.volume || self.levels.muted != state.muted)
++            {
+                 self.levels.volume = state.volume;
+                 self.levels.muted = state.muted;
+                 self.dirty = true;
+@@ -933,8 +1179,11 @@ impl RendererSession {
+         .map_err(|_| BuiltinRendererError::Negotiation)?;
+         self.stock = stock;
+         self.input.set_stock(stock);
+-        self.levels.volume = state.volume;
+-        self.levels.muted = state.muted;
++        // While the slider is shown, its level stands (see `set_desktop_state`).
++        if self.slider.is_none() {
++            self.levels.volume = state.volume;
++            self.levels.muted = state.muted;
++        }
+         self.desktop_state = state;
+         self.pending_desktop_state = None;
+         self.dirty = true;
+@@ -1002,11 +1251,12 @@ impl RequestIds {
+     }
+ }
+ 
+-#[derive(Debug, Eq, PartialEq)]
++#[derive(Debug, PartialEq)]
+ struct InputOutcome {
+     redraw: bool,
+     actions: Vec<StockAction>,
+     cancel_touch_id: bool,
++    drags: Vec<DragInput>,
+ }
+ 
+ struct InputInterpreter {
+@@ -1018,6 +1268,8 @@ struct InputInterpreter {
+     pressed: Option<StockAction>,
+     repeat: Option<RepeatState>,
+     suppress_tap: Option<StockAction>,
++    /// The contact whose drag is reported (for the volume slider), if any.
++    dragging: Option<crate::gesture::ContactId>,
+ }
+ 
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+@@ -1042,6 +1294,7 @@ impl InputInterpreter {
+             pressed: None,
+             repeat: None,
+             suppress_tap: None,
++            dragging: None,
+         })
+     }
+ 
+@@ -1120,7 +1373,9 @@ impl InputInterpreter {
+             .map_err(|_| BuiltinRendererError::Gesture)?;
+         let mut actions = Vec::new();
+         let mut cancel_touch_id = false;
++        let mut drags = Vec::new();
+         for gesture in gestures {
++            self.track_drag(gesture, overlay_state, &mut drags);
+             if matches!(
+                 gesture,
+                 crate::gesture::Gesture::DragStart(_) | crate::gesture::Gesture::Drag { .. }
+@@ -1165,9 +1420,57 @@ impl InputInterpreter {
+             redraw,
+             actions,
+             cancel_touch_id,
++            drags,
+         })
+     }
+ 
++    /// Reports drags for the level sliders, on the normal row only: a drag's
++    /// start (with the level whose controls it began on), its moves and its end.
++    fn track_drag(
++        &mut self,
++        gesture: crate::gesture::Gesture,
++        overlay_state: Option<OverlayState>,
++        drags: &mut Vec<DragInput>,
++    ) {
++        match gesture {
++            crate::gesture::Gesture::DragStart(contact)
++                if self.dragging.is_none() && overlay_state.is_none() && !self.fn_pressed =>
++            {
++                self.dragging = Some(contact.id());
++                let target = match self.stock.action_at(contact, false) {
++                    Some(StockAction::ToggleMute | StockAction::StepVolume(_)) => {
++                        Some(SliderTarget::Volume)
++                    }
++                    Some(StockAction::StepDisplayBrightness(_)) => {
++                        Some(SliderTarget::DisplayBrightness)
++                    }
++                    Some(StockAction::StepKeyboardBacklight(_)) => {
++                        Some(SliderTarget::KeyboardBacklight)
++                    }
++                    _ => None,
++                };
++                drags.push(DragInput::Start {
++                    x: contact.x(),
++                    target,
++                });
++            }
++            crate::gesture::Gesture::Drag { to, .. } if self.dragging == Some(to.id()) => {
++                drags.push(DragInput::Move { x: to.x() });
++            }
++            crate::gesture::Gesture::Release(contact) if self.dragging == Some(contact.id()) => {
++                self.dragging = None;
++                drags.push(DragInput::End);
++            }
++            _ => {}
++        }
++    }
++
++    /// Time until [`Self::take_repeat`] fires, while a repeatable control is held.
++    fn repeat_due_in(&self, now: Duration) -> Option<Duration> {
++        let repeat = self.repeat.as_ref()?;
++        (self.pressed == Some(repeat.action)).then(|| repeat.next_at.saturating_sub(now))
++    }
++
+     fn take_repeat(&mut self, now: Duration) -> Option<StockAction> {
+         let repeat = self.repeat.as_mut()?;
+         if now < repeat.next_at || self.pressed != Some(repeat.action) {
+@@ -1184,6 +1487,7 @@ impl InputInterpreter {
+     }
+ 
+     fn cancel_touches(&mut self) {
++        self.dragging = None;
+         self.wait_for_touch_release |= !self.gestures.is_idle();
+         self.gestures.cancel_all();
+         self.pressed = None;
+@@ -1842,6 +2146,7 @@ mod tests {
+                 redraw: true,
+                 actions: Vec::new(),
+                 cancel_touch_id: false,
++                drags: Vec::new(),
+             }
+         );
+         assert!(interpreter.fn_pressed());
+diff --git a/crates/t1-touchbar/src/desktop_provider.rs b/crates/t1-touchbar/src/desktop_provider.rs
+index 315fce7..f98c558 100644
+--- a/crates/t1-touchbar/src/desktop_provider.rs
++++ b/crates/t1-touchbar/src/desktop_provider.rs
+@@ -17,6 +17,8 @@ use std::sync::{
+ use std::thread;
+ use std::time::{Duration, Instant};
+ 
++use crate::wake::Waker;
++
+ pub const PROVIDER_ENVIRONMENT: &str = "T1BRIDGE_DESKTOP_PROVIDER";
+ 
+ const STATUS_MAGIC: &str = "T1BRIDGE-DESKTOP";
+@@ -159,13 +161,20 @@ impl DesktopProvider {
+     /// Starts a worker only for a currently valid provider path.
+     #[must_use]
+     pub fn start(path: &Path) -> Option<Self> {
++        Self::start_with_waker(path, None)
++    }
++
++    /// Like [`Self::start`], and wakes `waker` after every published status, so
++    /// a renderer sleeping in its input wait sees it at once.
++    #[must_use]
++    pub fn start_with_waker(path: &Path, waker: Option<Waker>) -> Option<Self> {
+         let path = resolve_provider_path(Some(path.as_os_str()))?;
+         let (state_sender, state_receiver) = mpsc::channel();
+         let actions = Arc::new(ActionMailbox::default());
+         let worker_actions = Arc::clone(&actions);
+         thread::Builder::new()
+             .name("t1-desktop-provider".into())
+-            .spawn(move || provider_worker(&path, &worker_actions, &state_sender))
++            .spawn(move || provider_worker(&path, &worker_actions, &state_sender, waker.as_ref()))
+             .ok()?;
+         Some(Self {
+             actions,
+@@ -225,7 +234,12 @@ impl Drop for DesktopProvider {
+     }
+ }
+ 
+-fn provider_worker(path: &Path, actions: &ActionMailbox, states: &mpsc::Sender<DesktopState>) {
++fn provider_worker(
++    path: &Path,
++    actions: &ActionMailbox,
++    states: &mpsc::Sender<DesktopState>,
++    waker: Option<&Waker>,
++) {
+     let mut available = None;
+     loop {
+         let state = if let Ok(state) = query_status(path) {
+@@ -241,6 +255,9 @@ fn provider_worker(path: &Path, actions: &ActionMailbox, states: &mpsc::Sender<D
+         if states.send(state).is_err() {
+             return;
+         }
++        if let Some(waker) = waker {
++            waker.wake();
++        }
+ 
+         let refresh_at = Instant::now() + STATUS_INTERVAL;
+         loop {
+diff --git a/crates/t1-touchbar/src/lib.rs b/crates/t1-touchbar/src/lib.rs
+index 43722b7..efc23c9 100644
+--- a/crates/t1-touchbar/src/lib.rs
++++ b/crates/t1-touchbar/src/lib.rs
+@@ -7,8 +7,10 @@ pub mod gesture;
+ mod overlay_labels;
+ pub mod overlay_state;
+ pub mod renderer_launcher;
++mod slider;
+ mod stock_art;
+ mod stock_icons;
+ mod stock_labels;
+ pub mod stock_slice;
+ pub mod touch_id_overlay;
++pub mod wake;
+diff --git a/crates/t1-touchbar/src/overlay_state.rs b/crates/t1-touchbar/src/overlay_state.rs
+index 5b504bc..7e92f31 100644
+--- a/crates/t1-touchbar/src/overlay_state.rs
++++ b/crates/t1-touchbar/src/overlay_state.rs
+@@ -11,6 +11,8 @@ use std::sync::mpsc::{self, Receiver};
+ use std::thread::{self, JoinHandle};
+ use std::time::Duration;
+ 
++use crate::wake::Waker;
++
+ pub const OVERLAY_STATE_PATH: &str = "/run/t1bridge/touch-id-state.json";
+ 
+ const MAX_RECORD_BYTES: u64 = 1_024;
+@@ -357,10 +359,20 @@ pub struct OverlayWatcher {
+ impl OverlayWatcher {
+     #[must_use]
+     pub fn start() -> Self {
+-        Self::start_with_reader(OverlayFileReader::new(), WATCH_INTERVAL)
++        Self::start_with_waker(None)
+     }
+ 
+-    fn start_with_reader(reader: OverlayFileReader, interval: Duration) -> Self {
++    /// Like [`Self::start`], and wakes `waker` after every published change.
++    #[must_use]
++    pub fn start_with_waker(waker: Option<Waker>) -> Self {
++        Self::start_with_reader(OverlayFileReader::new(), WATCH_INTERVAL, waker)
++    }
++
++    fn start_with_reader(
++        reader: OverlayFileReader,
++        interval: Duration,
++        waker: Option<Waker>,
++    ) -> Self {
+         let (sender, updates) = mpsc::channel();
+         let stop = Arc::new(AtomicBool::new(false));
+         let worker_stop = Arc::clone(&stop);
+@@ -375,6 +387,9 @@ impl OverlayWatcher {
+                     if sender.send(observation).is_err() {
+                         break;
+                     }
++                    if let Some(waker) = &waker {
++                        waker.wake();
++                    }
+                     previous = Some(observation);
+                 }
+                 thread::sleep(interval);
+@@ -1007,7 +1022,7 @@ mod tests {
+     fn watcher_reports_only_observation_transitions() {
+         let path = temporary_path("state.json");
+         let reader = OverlayFileReader::at_path(path.clone());
+-        let watcher = OverlayWatcher::start_with_reader(reader, Duration::from_millis(5));
++        let watcher = OverlayWatcher::start_with_reader(reader, Duration::from_millis(5), None);
+ 
+         let deadline = std::time::Instant::now() + Duration::from_secs(1);
+         let first = loop {
+diff --git a/crates/t1-touchbar/src/slider.rs b/crates/t1-touchbar/src/slider.rs
+new file mode 100644
+index 0000000..b535412
+--- /dev/null
++++ b/crates/t1-touchbar/src/slider.rs
+@@ -0,0 +1,162 @@
++//! The level sliders: slide a finger on the volume controls (mute, down, up),
++//! the display brightness controls or the keyboard backlight controls, and the
++//! bar becomes one wide slider for that level that follows the finger, until
++//! shortly after it lifts.
++//!
++//! The level moves with the finger relative to where the drag began, so it
++//! never jumps to the finger's position on the bar.
++
++use std::time::Duration;
++
++/// How long the slider stays after the finger lifts before the bar returns.
++pub const LINGER: Duration = Duration::from_millis(1_500);
++
++/// The level a slider sets.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub enum SliderTarget {
++    Volume,
++    DisplayBrightness,
++    KeyboardBacklight,
++}
++
++/// One drag on the bar, as the input interpreter reports it.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub enum DragInput {
++    /// A contact crossed the drag threshold; `target` is the level whose
++    /// controls it started on, if any.
++    Start {
++        x: f64,
++        target: Option<SliderTarget>,
++    },
++    /// The dragging contact moved to `x`.
++    Move { x: f64 },
++    /// The dragging contact lifted.
++    End,
++}
++
++/// Slider state while it is on the bar.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct LevelSlider {
++    target: SliderTarget,
++    from_level: u8,
++    from_x: f64,
++    level: u8,
++    dragging: bool,
++    hide_at: Option<Duration>,
++}
++
++impl LevelSlider {
++    /// A slider for `target` grabbed at `x` while it is at `level` percent.
++    #[must_use]
++    pub fn start(target: SliderTarget, level: u8, x: f64) -> Self {
++        let level = level.min(100);
++        Self {
++            target,
++            from_level: level,
++            from_x: x,
++            level,
++            dragging: true,
++            hide_at: None,
++        }
++    }
++
++    #[must_use]
++    pub const fn target(&self) -> SliderTarget {
++        self.target
++    }
++
++    /// The level shown, in percent.
++    #[must_use]
++    pub const fn level(&self) -> u8 {
++        self.level
++    }
++
++    #[must_use]
++    pub const fn dragging(&self) -> bool {
++        self.dragging
++    }
++
++    /// Grabs the shown slider again at `x`, continuing from its level.
++    pub fn regrab(&mut self, x: f64) {
++        self.from_level = self.level;
++        self.from_x = x;
++        self.dragging = true;
++        self.hide_at = None;
++    }
++
++    /// Follows the finger to `x` on a track `track_width` pixels wide (the
++    /// whole track is 0 to 100 %). Returns the new level when it changed.
++    pub fn drag_to(&mut self, x: f64, track_width: u32) -> Option<u8> {
++        if !self.dragging || track_width == 0 {
++            return None;
++        }
++        let delta = (x - self.from_x) * 100.0 / f64::from(track_width);
++        let level = (f64::from(self.from_level) + delta)
++            .round()
++            .clamp(0.0, 100.0);
++        // Clamped to 0..=100 above, so the conversion cannot truncate.
++        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
++        let level = level as u8;
++        if level == self.level {
++            return None;
++        }
++        self.level = level;
++        Some(level)
++    }
++
++    /// The finger lifted at `now`: the slider stays for [`LINGER`].
++    pub fn release(&mut self, now: Duration) {
++        self.dragging = false;
++        self.hide_at = Some(now.saturating_add(LINGER));
++    }
++
++    /// Whether the slider should give the bar back at `now`.
++    #[must_use]
++    pub fn expired(&self, now: Duration) -> bool {
++        self.hide_at.is_some_and(|hide_at| now >= hide_at)
++    }
++
++    /// Time until the slider hides, once released.
++    #[must_use]
++    pub fn hides_in(&self, now: Duration) -> Option<Duration> {
++        self.hide_at.map(|hide_at| hide_at.saturating_sub(now))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn follows_the_finger_relative_to_the_grab() {
++        let mut slider = LevelSlider::start(SliderTarget::Volume, 40, 1_000.0);
++        assert_eq!(slider.drag_to(1_000.0, 1_000), None);
++        assert_eq!(slider.drag_to(1_100.0, 1_000), Some(50));
++        assert_eq!(slider.drag_to(700.0, 1_000), Some(10));
++        assert_eq!(slider.level(), 10);
++    }
++
++    #[test]
++    fn clamps_to_the_volume_range() {
++        let mut slider = LevelSlider::start(SliderTarget::Volume, 90, 0.0);
++        assert_eq!(slider.drag_to(5_000.0, 1_000), Some(100));
++        assert_eq!(slider.drag_to(-5_000.0, 1_000), Some(0));
++    }
++
++    #[test]
++    fn lingers_after_release_and_regrabs_from_its_level() {
++        let mut slider = LevelSlider::start(SliderTarget::DisplayBrightness, 20, 0.0);
++        slider.drag_to(300.0, 1_000);
++        slider.release(Duration::from_secs(1));
++        assert_eq!(slider.drag_to(900.0, 1_000), None, "no drag while released");
++        assert!(!slider.expired(Duration::from_secs(1)));
++        assert_eq!(
++            slider.hides_in(Duration::from_secs(2)),
++            Some(Duration::from_millis(500))
++        );
++        assert!(slider.expired(Duration::from_millis(2_500)));
++        slider.regrab(100.0);
++        assert!(slider.dragging());
++        assert_eq!(slider.drag_to(200.0, 1_000), Some(60));
++    }
++}
+diff --git a/crates/t1-touchbar/src/stock_slice.rs b/crates/t1-touchbar/src/stock_slice.rs
+index 4c0ae87..137f0be 100644
+--- a/crates/t1-touchbar/src/stock_slice.rs
++++ b/crates/t1-touchbar/src/stock_slice.rs
+@@ -4,6 +4,7 @@ use std::{error::Error, fmt};
+ 
+ use crate::framebuffer::{FramebufferError, Rectangle, Rgb, Xrgb8888Frame};
+ use crate::gesture::{DisplayContact, Gesture};
++use crate::slider::SliderTarget;
+ use crate::stock_art::{self, Symbol};
+ use crate::stock_labels::{self, AlphaMask};
+ 
+@@ -296,6 +297,102 @@ impl StockBar {
+         }
+     }
+ 
++    /// The level slider's area: the whole bar right of Esc.
++    #[must_use]
++    pub(crate) fn slider_bounds(self) -> Rectangle {
++        let left = self.escape_right().saturating_add(self.scaled_x(10));
++        Rectangle {
++            x: left,
++            y: self.scaled_y(PLATE_Y),
++            width: self.width.saturating_sub(left),
++            height: self.scaled_y(PLATE_HEIGHT).max(1),
++        }
++    }
++
++    /// The slider's track, right of its icon: a drag across its whole width
++    /// spans 0 to 100 %.
++    #[must_use]
++    pub(crate) fn slider_track(self) -> Rectangle {
++        let bounds = self.slider_bounds();
++        let icon = bounds.height.saturating_mul(2);
++        let pad = self.scaled_x(36);
++        let left = bounds.x.saturating_add(icon);
++        let right = bounds.x.saturating_add(bounds.width).saturating_sub(pad);
++        let height = (bounds.height / 6).max(2);
++        Rectangle {
++            x: left,
++            y: bounds.y + (bounds.height - height) / 2,
++            width: right.saturating_sub(left),
++            height,
++        }
++    }
++
++    /// Draws Esc and the slider for `target` at `level` percent (`muted` only
++    /// changes the volume icon).
++    ///
++    /// # Errors
++    ///
++    /// Rejects a changed frame geometry or an internally invalid draw.
++    pub(crate) fn render_slider(
++        self,
++        frame: &mut Xrgb8888Frame<'_>,
++        target: SliderTarget,
++        level: u8,
++        muted: bool,
++    ) -> Result<(), StockSliceError> {
++        if frame.width() != self.width || frame.height() != self.height {
++            return Err(StockSliceError::FrameGeometryMismatch);
++        }
++        frame.clear(BACKGROUND);
++        self.draw_plate(frame, self.escape_bounds(), StockAction::Escape, None)?;
++        stock_art::draw_label(frame, self.escape_bounds(), stock_labels::ESC, LABEL)?;
++        let bounds = self.slider_bounds();
++        if bounds.width == 0 {
++            return Ok(());
++        }
++        stock_art::draw_rounded_plate(frame, bounds, self.scaled_y(PLATE_RADIUS).max(1), PLATE)?;
++        let icon = Rectangle {
++            width: bounds.height.saturating_mul(2).min(bounds.width),
++            ..bounds
++        };
++        let symbol = match target {
++            SliderTarget::Volume if muted => Symbol::Mute,
++            SliderTarget::Volume => Symbol::VolumeUp,
++            SliderTarget::DisplayBrightness => Symbol::DisplayUp,
++            SliderTarget::KeyboardBacklight => Symbol::KeyboardUp,
++        };
++        stock_art::draw_symbol(frame, icon, symbol, LABEL)?;
++        let track = self.slider_track();
++        if track.width == 0 {
++            return Ok(());
++        }
++        let radius = track.height / 2;
++        stock_art::draw_rounded_plate(frame, track, radius, PRESSED_PLATE)?;
++        let filled = u32::try_from(u64::from(track.width) * u64::from(level.min(100)) / 100)
++            .unwrap_or(track.width);
++        if filled > 0 {
++            let fill = Rectangle {
++                width: filled,
++                ..track
++            };
++            stock_art::draw_rounded_plate(frame, fill, radius, LABEL)?;
++        }
++        // The knob: a disc on the fill's end, kept inside the slider plate.
++        let knob = (bounds.height * 3 / 5).max(2);
++        let centre = track.x + filled;
++        let left = centre
++            .saturating_sub(knob / 2)
++            .clamp(bounds.x, bounds.x + bounds.width - knob.min(bounds.width));
++        let knob_bounds = Rectangle {
++            x: left,
++            y: bounds.y + (bounds.height - knob) / 2,
++            width: knob,
++            height: knob,
++        };
++        stock_art::draw_rounded_plate(frame, knob_bounds, knob / 2, LABEL)?;
++        Ok(())
++    }
++
+     /// Maps a completed tap to one currently visible action.
+     #[must_use]
+     pub fn action_for_gesture(self, gesture: Gesture, fn_held: bool) -> Option<StockAction> {
+diff --git a/crates/t1-touchbar/src/wake.rs b/crates/t1-touchbar/src/wake.rs
+new file mode 100644
+index 0000000..88f818a
+--- /dev/null
++++ b/crates/t1-touchbar/src/wake.rs
+@@ -0,0 +1,72 @@
++//! Wakes the built-in renderer's input wait from another thread.
++//!
++//! The renderer sleeps in `poll(2)` on the hardware socket until input, its
++//! next timer, or news from a background thread (desktop state, the Touch ID
++//! overlay). The threads cannot touch that socket, so they write one byte to a
++//! local socket pair that the renderer waits on as well.
++
++use std::io::{self, Read, Write};
++use std::os::fd::{AsFd, BorrowedFd};
++use std::os::unix::net::UnixStream;
++use std::sync::Arc;
++
++/// Sending half: cheap to clone and never blocks. A full buffer only means a
++/// wake is already pending, so the write result is ignored.
++#[derive(Clone, Debug)]
++pub struct Waker(Arc<UnixStream>);
++
++impl Waker {
++    /// Makes the renderer's current or next wait return at once.
++    pub fn wake(&self) {
++        let _ = (&*self.0).write(&[1]);
++    }
++}
++
++/// Receiving half, waited on next to the hardware socket.
++#[derive(Debug)]
++pub struct WakeReceiver(UnixStream);
++
++impl WakeReceiver {
++    /// Consumes every pending wake, so the next wait sleeps again.
++    pub fn drain(&self) {
++        let mut buffer = [0_u8; 64];
++        while matches!((&self.0).read(&mut buffer), Ok(length) if length > 0) {}
++    }
++}
++
++impl AsFd for WakeReceiver {
++    fn as_fd(&self) -> BorrowedFd<'_> {
++        self.0.as_fd()
++    }
++}
++
++/// Creates a connected, nonblocking waker and receiver.
++///
++/// # Errors
++///
++/// Returns the I/O error if the socket pair cannot be created or configured.
++pub fn pair() -> io::Result<(Waker, WakeReceiver)> {
++    let (sender, receiver) = UnixStream::pair()?;
++    sender.set_nonblocking(true)?;
++    receiver.set_nonblocking(true)?;
++    Ok((Waker(Arc::new(sender)), WakeReceiver(receiver)))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn wake_is_readable_until_drained() {
++        let (waker, receiver) = pair().expect("socket pair");
++        waker.wake();
++        waker.wake();
++        let mut buffer = [0_u8; 8];
++        assert!(matches!((&receiver.0).read(&mut buffer), Ok(length) if length > 0));
++        receiver.drain();
++        assert!(
++            (&receiver.0).read(&mut buffer).is_err(),
++            "drained receiver would block"
++        );
++    }
++}
+-- 
+2.55.0
+

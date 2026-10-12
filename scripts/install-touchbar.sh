@@ -68,10 +68,9 @@ sudo -u "$U" env XDG_RUNTIME_DIR="/run/user/$(id -u "$U")" systemctl --user enab
 
 say "Volume, mute, media and brightness on the Touch Bar (Omarchy provider)"
 sudo -u "$U" install -d "$HOME_DIR/.local/bin" "$HOME_DIR/.config/systemd/user/t1-touchbar.service.d"
-sudo -u "$U" curl -fsSL \
-  https://raw.githubusercontent.com/niconistal/t1-revive/main/contrib/omarchy/t1bridge-omarchy-provider.sh \
-  -o "$HOME_DIR/.local/bin/t1bridge-omarchy-provider"
-chmod 755 "$HOME_DIR/.local/bin/t1bridge-omarchy-provider"
+# The guide's provider (based on t1-revive's contrib/omarchy one, MIT): see install-touchbar-renderer.sh.
+sudo -u "$U" install -m 755 "$(cd "$(dirname "$0")" && pwd)/t1bridge-omarchy-provider.sh" \
+  "$HOME_DIR/.local/bin/t1bridge-omarchy-provider"
 printf '[Service]\nEnvironment=T1BRIDGE_DESKTOP_PROVIDER=%%h/.local/bin/t1bridge-omarchy-provider\n' \
   > "$HOME_DIR/.config/systemd/user/t1-touchbar.service.d/omarchy-provider.conf"
 chown -R "$U:" "$HOME_DIR/.config/systemd/user/t1-touchbar.service.d"

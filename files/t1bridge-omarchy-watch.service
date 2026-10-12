@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep the Touch Bar's desktop state current from events (omarchy-macbookpro-a1706)
+PartOf=graphical-session.target
+After=graphical-session.target pipewire-pulse.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/t1bridge-omarchy-watch
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

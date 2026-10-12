@@ -28,6 +28,10 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
 - t1-revive: 4 min 28 s. Needs mains power (it refused on battery) and a patched libimobiledevice stack it builds itself.
 - Volume/mute/media/brightness: Omarchy provider script from the t1-revive repository.
 
+- Renderer (t1bridge 0.1.12) idle: main thread ~196 wakeups/s (a 5 ms poll of the hardware socket); service
+  ~41 ms CPU/s, nearly all the provider's once-a-second status (five programs). poll(2) with a wake socket pair
+  plus an event-fed provider: 1 wakeup/s, 4 ms CPU/s. Volume, brightness and keyboard-light sliders added.
+
 ## Wi-Fi
 - No NVRAM: 2.4 GHz only. Installed an NVRAM with the card's MAC (which was the placeholder).
 - A first failsafe service (delete the NVRAM if no Wi-Fi interface after 90 s) fired during a suspend test and

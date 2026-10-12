@@ -70,6 +70,10 @@ else
   - Touch Bar"
   fi
 fi
+# The guide's renderer (no polling, level sliders) and event-fed provider, once the T1 runs.
+if t1_running && pacman -Q t1bridge >/dev/null 2>&1; then
+  try "Touch Bar renderer" sh "$HERE/install-touchbar-renderer.sh"
+fi
 
 step "4. Sleep (docs/05)"
 if [ -n "$FALLBACK" ]; then try "Sleep" root sh "$HERE/install-sleep.sh" "$FALLBACK"

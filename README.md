@@ -20,7 +20,7 @@ on the machine, and every dead end that cost hours is written down too, so you c
 | Installer, boot, disk, keyboard, trackpad | works | The erase-disk install wipes the Touch Bar firmware: read [the install notes](docs/01-install.md) **before** you install |
 | Sound (speakers, microphone) | works | Community CS8409 driver via DKMS, with a patch for the mic's level. [docs/02-sound.md](docs/02-sound.md) |
 | 5 GHz Wi-Fi (BCM43602) | works at boot | Needs an NVRAM file. [docs/03-wifi.md](docs/03-wifi.md) |
-| Touch Bar, camera, ambient light sensor | works | Needs the T1 firmware restored. [docs/04-touchbar.md](docs/04-touchbar.md) |
+| Touch Bar, camera, ambient light sensor | works | Needs the T1 firmware restored; volume, brightness and keyboard-light sliders, no polling. [docs/04-touchbar.md](docs/04-touchbar.md) |
 | Sleep (deep, S3) | works | Thunderbolt controllers removed around it, the T1 told after the wake; about 0.9 % battery per hour. [docs/05-sleep.md](docs/05-sleep.md) |
 | Wi-Fi and Bluetooth after sleep | **fixed** (driver patch) | Stock brcmfmac fails 5 GHz and Bluetooth stutters after a resume; a DKMS-packaged patch fixes it. [docs/06-wifi-after-sleep.md](docs/06-wifi-after-sleep.md) |
 | Automatic keyboard light and screen brightness | works | From the ambient light sensor. [docs/07-light.md](docs/07-light.md) |
@@ -55,6 +55,7 @@ The steps, one by one (what `setup.sh` runs):
 sudo sh scripts/install-sound.sh              # then reboot
 sudo sh scripts/install-wifi.sh               # NVRAM for 5 GHz (the tested values); then reboot
 sudo bash scripts/install-touchbar.sh         # mains power; restores the T1 firmware; log out/in after
+sh scripts/install-touchbar-renderer.sh       # the guide's Touch Bar renderer: sliders, no polling
 sudo sh scripts/install-sleep.sh              # deep sleep; optional argument: a 2.4 GHz connection to fall back to
 sudo sh scripts/install-wifi-sleep-fix.sh     # patched Wi-Fi driver (DKMS) for 5 GHz and Bluetooth after sleep; reboot
 sudo sh scripts/install-light.sh              # automatic keyboard light and screen brightness
@@ -74,6 +75,7 @@ are only worth testing once Wi-Fi works.
 | Sound | `aplay -l` lists `CS8409/CS42L83 Analog` | `sudo dkms remove snd_hda_macbookpro/0.1 --all`, `sudo rm -rf /usr/local/src/snd_hda_macbookpro /etc/wireplumber/wireplumber.conf.d/60-a1706-internal-mic.conf`, reboot |
 | Wi-Fi (5 GHz) | `iw phy \| grep -c 5180` prints more than 0 | `sudo sh scripts/install-wifi.sh remove`, reboot |
 | Touch Bar | `sudo t1bridge status` says `touchbar: ready` | `sudo pacman -Rns t1bridge t1bridge-dkms` and delete the `[standardagents]` lines from `/etc/pacman.conf`; the restored T1 firmware stays (it is Apple's) |
+| Touch Bar renderer | `systemctl --user cat t1-touchbar` shows the `50-a1706-renderer.conf` drop-in | `sh scripts/install-touchbar-renderer.sh remove` |
 | Sleep | `cat /sys/power/mem_sleep` shows `[deep]`; the lid closes and opens | `sudo sh scripts/install-sleep.sh remove`, reboot |
 | Wi-Fi after sleep | `modinfo -F parm brcmfmac \| grep mac_efi_restore` | `sudo sh scripts/install-wifi-sleep-fix.sh remove`, reboot |
 | Light sensor | `systemctl is-active kbd-auto-backlight screen-auto-brightness` | `sudo sh scripts/install-light.sh remove` |
@@ -100,6 +102,8 @@ docs/                  one page per problem: what is wrong, why, the fix, how to
 scripts/               setup.sh (all of it), the installers it runs and the small services (all safe to run again)
 files/                 the data they install: the Wi-Fi NVRAM, system units, config
 brcmfmac-apple-resume/ the Wi-Fi driver patch and its DKMS package (built per kernel from the upstream source)
+snd-hda-macbookpro/    the patches for the community sound driver (the internal mic)
+t1bridge-renderer/     the patch for t1bridge's Touch Bar renderer (sliders, no polling)
 docs/99-log.md         the full trail of what was tried and what each test showed
 ```
 
