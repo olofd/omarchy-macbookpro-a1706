@@ -107,8 +107,11 @@ if [ "$TOUCHID" = 1 ]; then
   fi
 fi
 
+step "9. Power: graphics compression (docs/11)"
+try "Power" root sh "$HERE/install-power.sh"
+
 if [ "$EXTRAS" = 1 ]; then
-  step "9. Desktop extras: overview, dock, night light, charger chime (docs/10)"
+  step "10. Desktop extras: overview, dock, night light, charger chime (docs/10)"
   try "Overview" sh "$HERE/install-overview.sh"
   command -v nwg-dock-hyprland >/dev/null || try "Dock package" omarchy pkg add nwg-dock-hyprland
   if command -v nwg-dock-hyprland >/dev/null; then try "Dock" sh "$HERE/install-dock.sh"; fi

@@ -27,6 +27,7 @@ on the machine, and every dead end that cost hours is written down too, so you c
 | Trackpad palm trouble, scrolling, gestures | tuned | [docs/08-input.md](docs/08-input.md) |
 | Touch ID | works | For sudo and Polkit prompts, with T1Bridge. [docs/09-touch-id.md](docs/09-touch-id.md) |
 | Workspace overview, dock, night light by location | optional | [docs/10-desktop-extras.md](docs/10-desktop-extras.md) |
+| Graphics compression (power) | works | A boot option lets the graphics compress the screen image. [docs/11-power.md](docs/11-power.md) |
 
 ## The short version
 
@@ -59,6 +60,7 @@ sudo sh scripts/install-wifi-sleep-fix.sh     # patched Wi-Fi driver (DKMS) for 
 sudo sh scripts/install-light.sh              # automatic keyboard light and screen brightness
 sh scripts/install-input.sh                   # trackpad settings, in your ~/.config/hypr/input.lua
 sudo sh scripts/install-touchid.sh install    # Touch ID; reboot, then the enroll and pam steps (docs/09)
+sudo sh scripts/install-power.sh              # graphics compression (a boot option); reboot
 sh scripts/install-overview.sh                # desktop extras (docs/10); also install-dock, -nightlight, -chime
 ```
 
@@ -77,6 +79,7 @@ are only worth testing once Wi-Fi works.
 | Light sensor | `systemctl is-active kbd-auto-backlight screen-auto-brightness` | `sudo sh scripts/install-light.sh remove` |
 | Trackpad | `hyprctl configerrors` is empty; two-finger scroll is natural | `sh scripts/install-input.sh remove` |
 | Touch ID | `sudo -k; sudo true` asks for your finger | `sudo sh scripts/install-touchid.sh unpam` (the packages: [docs/09](docs/09-touch-id.md)) |
+| Graphics compression | `grep -o intel_iommu=igfx_off /proc/cmdline` | `sudo sh scripts/install-power.sh remove`, reboot |
 | Desktop extras | see [docs/10](docs/10-desktop-extras.md) | `sh scripts/install-<name>.sh remove` |
 
 ## Before you install anything
