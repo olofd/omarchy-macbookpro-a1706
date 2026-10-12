@@ -12,6 +12,7 @@
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 F=$HERE/../files
+. "$HERE/lib.sh"
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo sh $0" >&2; exit 1; }
 
 case "${1:-}" in remove|--remove)
@@ -27,12 +28,15 @@ if ! modprobe acpi_call 2>/dev/null; then
   modprobe acpi_call 2>/dev/null ||
     echo "note: acpi_call is missing; without it the Touch Bar stays dark after a deep sleep" >&2
 fi
-install -m 644 "$F/mem-sleep.conf" /etc/tmpfiles.d/mem-sleep.conf
-install -m 755 "$HERE/sleep-hook.sh" /usr/lib/systemd/system-sleep/mac-sleep
-install -m 755 "$HERE/wifi-recover.sh" /usr/local/sbin/wifi-recover
+put_file "$F/mem-sleep.conf" /etc/tmpfiles.d/mem-sleep.conf 644
+put_file "$HERE/sleep-hook.sh" /usr/lib/systemd/system-sleep/mac-sleep 755
+put_file "$HERE/wifi-recover.sh" /usr/local/sbin/wifi-recover 755
 # The name is stored as data and read back as data (never run as shell code): SSIDs can contain anything.
-if [ -n "${1:-}" ]; then printf 'FALLBACK=%s\n' "$1" > /etc/wifi-recover.conf; fi
-sed -i 's/\r$//' /etc/tmpfiles.d/mem-sleep.conf /usr/lib/systemd/system-sleep/mac-sleep \
-  /usr/local/sbin/wifi-recover
+if [ -n "${1:-}" ]; then
+  put_text /etc/wifi-recover.conf 644 <<EOF
+FALLBACK=$1
+EOF
+fi
+[ "$CHANGED" = 1 ] || { echo "Sleep: already up to date."; exit 0; }
 systemd-tmpfiles --create /etc/tmpfiles.d/mem-sleep.conf
 echo "Done. Test: save your work, unmount any USB-C drive, close the lid, wait a minute, open it."

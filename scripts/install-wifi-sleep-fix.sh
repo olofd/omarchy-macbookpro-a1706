@@ -14,6 +14,7 @@ VER=1.0
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=$HERE/../$NAME
 DEST=/usr/src/$NAME-$VER
+. "$HERE/lib.sh"
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo sh $0" >&2; exit 1; }
 
 if [ "${1:-}" = remove ] || [ "${1:-}" = --remove ]; then
@@ -25,6 +26,12 @@ if [ "${1:-}" = remove ] || [ "${1:-}" = --remove ]; then
 fi
 
 KVER=$(uname -r)
+# Already built for this kernel from exactly these files: nothing to do (a rebuild takes minutes).
+same=1
+for f in "$SRC/dkms.conf" "$SRC/dkms-build.sh" "$SRC"/*.patch; do cmp -s "$f" "$DEST/${f##*/}" || same=0; done
+if [ "$same" = 1 ] && dkms status -m "$NAME" -v "$VER" -k "$KVER" 2>/dev/null | grep -q ': installed'; then
+  echo "Wi-Fi sleep fix: already up to date (built for $KVER)."; exit 0
+fi
 [ -f "/lib/modules/$KVER/build/.config" ] || {
   echo "the headers for kernel $KVER are missing: install them first (Omarchy: linux-omarchy-headers;" >&2
   echo "Arch: linux-headers; Debian/Ubuntu: linux-headers-$KVER; Fedora: kernel-devel-$KVER)" >&2
@@ -54,7 +61,8 @@ cp "$SRC/dkms.conf" "$SRC/dkms-build.sh" "$SRC"/*.patch "$DEST/"
 dkms add "$NAME/$VER"
 dkms install "$NAME/$VER" -k "$KVER"
 depmod -a "$KVER"
-echo "Installed. Reboot, then check:  modinfo -F parm brcmfmac | grep mac_efi_restore"
+needs_reboot "the patched Wi-Fi driver"
+echo "Then check:  modinfo -F parm brcmfmac | grep mac_efi_restore"
 echo "After a sleep the log shows:     journalctl -k -b | grep \"restored the chip setup\""
 echo "A new kernel rebuilds it automatically (it needs internet once)."
 echo "If that happened offline: sudo dkms autoinstall"

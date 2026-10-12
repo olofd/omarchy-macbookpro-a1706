@@ -15,6 +15,8 @@
 # focus_on_activate = false, as Omarchy already does for Telegram. Add yours to STEAL below if you see this.
 set -eu
 [ "$(id -u)" -ne 0 ] || { echo "run as the user, not root" >&2; exit 1; }
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib.sh"
 
 ID=moorgrove.overview
 REPO=https://github.com/itsmoorgrove/omarchy-overview.git
@@ -24,11 +26,7 @@ END="-- <<< mac-overview"
 TOGGLE="omarchy-shell shell toggle $ID"
 STEAL="com.anthropic.Claude"   # window classes (hyprctl clients) that steal focus back
 
-strip() { # file: remove our block
-  [ -f "$1" ] || return 0
-  awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$1" > "$1.tmp.$$" &&
-    mv "$1.tmp.$$" "$1"
-}
+strip() { drop_block "$1" "$BEGIN" "$END"; }
 
 if [ "${1:-}" = "--remove" ] || [ "${1:-}" = remove ]; then
   strip "$HYPR/input.lua"; strip "$HYPR/bindings.lua"; strip "$HYPR/hyprland.lua"
@@ -42,30 +40,25 @@ fi
 if ! omarchy plugin list 2>/dev/null | grep -q "^$ID "; then
   omarchy plugin add "$REPO" --yes
 fi
-omarchy plugin enable "$ID" >/dev/null
+omarchy plugin list 2>/dev/null | grep -q "^$ID  *enabled " ||
+  { omarchy plugin enable "$ID" >/dev/null; CHANGED=1; }
 
 for f in input.lua bindings.lua hyprland.lua; do
   [ -f "$HYPR/$f.before-overview" ] || cp "$HYPR/$f" "$HYPR/$f.before-overview"
-  strip "$HYPR/$f"
 done
-cat >> "$HYPR/input.lua" <<EOF
-$BEGIN
+put_block "$HYPR/input.lua" "$BEGIN" "$END" <<EOF
 -- Three fingers up: the workspace overview (three fingers sideways switch workspaces, above).
 hl.gesture({ fingers = 3, direction = "up", action = function() hl.dispatch(hl.dsp.exec_cmd("$TOGGLE")) end })
-$END
 EOF
-cat >> "$HYPR/bindings.lua" <<EOF
-$BEGIN
+put_block "$HYPR/bindings.lua" "$BEGIN" "$END" <<EOF
 -- Super + § (the key left of 1 on the Swedish layout; keysym "section"): the workspace overview.
 o.bind("SUPER + section", "Workspace overview", "$TOGGLE")
-$END
 EOF
-cat >> "$HYPR/hyprland.lua" <<EOF
-$BEGIN
+put_block "$HYPR/hyprland.lua" "$BEGIN" "$END" <<EOF
 -- Apps that pull focus back to their own workspace undo switches from the overview.
 $(for c in $STEAL; do echo "o.window(\"$c\", { focus_on_activate = false })"; done)
-$END
 EOF
+[ "$CHANGED" = 1 ] || { echo "Overview: already up to date."; exit 0; }
 
 hyprctl reload >/dev/null
 errors=$(hyprctl configerrors 2>&1 | grep -v '^$' || true)

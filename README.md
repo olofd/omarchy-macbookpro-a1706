@@ -30,25 +30,40 @@ on the machine, and every dead end that cost hours is written down too, so you c
 
 ## The short version
 
-On a fresh Omarchy install (2.4 GHz Wi-Fi or a USB Ethernet adapter is enough to start), get this repository
-and run the steps in order:
+On a fresh Omarchy install (2.4 GHz Wi-Fi or a USB Ethernet adapter is enough to start), with the charger
+plugged in, in a terminal in the desktop:
 
 ```sh
-omarchy update                                # first: a current Omarchy and kernel, then reboot
+omarchy update                     # first: a current Omarchy and kernel, then reboot
 git clone https://github.com/olofd/omarchy-macbookpro-a1706 && cd omarchy-macbookpro-a1706
+sh scripts/setup.sh                # as yourself; it asks for sudo where it needs it
+```
+
+`setup.sh` runs every step below in order. Each step checks what is already there and only does what is
+missing or changed, so it is safe to run again, and on an up-to-date Mac it changes nothing. When a step needs
+a reboot (sound, Wi-Fi, the Touch Bar, the driver fix), the steps that depend on it wait and the summary says
+so: **reboot and run it again** until it says "All done". Run it again after every `git pull` too: that is how
+the Mac keeps matching this repository. Options: `--fallback MyNetwork` (a 2.4 GHz connection for the wake
+check, [chapter 5](docs/05-sleep.md)), `--no-touchid`, `--no-extras`. Two Touch ID steps stay by hand (it
+prints them): enrolling a finger, and adding Touch ID to sudo. After the Touch Bar step, back up the T1
+firmware it restored: `sudo tar -C /boot/EFI -czf efi-apple.tgz APPLE`, and keep the file off the machine.
+
+The steps, one by one (what `setup.sh` runs):
+
+```sh
 sudo sh scripts/install-sound.sh              # then reboot
 sudo sh scripts/install-wifi.sh               # NVRAM for 5 GHz (the tested values); then reboot
 sudo bash scripts/install-touchbar.sh         # mains power; restores the T1 firmware; log out/in after
-sudo tar -C /boot/EFI -czf efi-apple.tgz APPLE   # back up the restored T1 firmware; keep it off the machine
 sudo sh scripts/install-sleep.sh              # deep sleep; optional argument: a 2.4 GHz connection to fall back to
 sudo sh scripts/install-wifi-sleep-fix.sh     # patched Wi-Fi driver (DKMS) for 5 GHz and Bluetooth after sleep; reboot
 sudo sh scripts/install-light.sh              # automatic keyboard light and screen brightness
-sh scripts/install-input.sh                   # trackpad settings, added to your ~/.config/hypr/input.lua
-sudo sh scripts/install-touchid.sh install    # optional: Touch ID; reboot, then the enroll and pam steps (docs/09)
+sh scripts/install-input.sh                   # trackpad settings, in your ~/.config/hypr/input.lua
+sudo sh scripts/install-touchid.sh install    # Touch ID; reboot, then the enroll and pam steps (docs/09)
+sh scripts/install-overview.sh                # desktop extras (docs/10); also install-dock, -nightlight, -chime
 ```
 
-Do them in this order: the light sensor and Touch ID need the Touch Bar step (both sit on the T1), and the
-sleep steps are only worth testing once Wi-Fi works. The desktop extras (docs/10) can come any time.
+In this order: the light sensor and Touch ID need the Touch Bar step (both sit on the T1), and the sleep steps
+are only worth testing once Wi-Fi works.
 
 ## Check and undo each step
 
@@ -79,7 +94,7 @@ sleep steps are only worth testing once Wi-Fi works. The desktop extras (docs/10
 ```text
 README.md              this file
 docs/                  one page per problem: what is wrong, why, the fix, how to check it
-scripts/               the installers and the small services (all safe to run again)
+scripts/               setup.sh (all of it), the installers it runs and the small services (all safe to run again)
 files/                 the data they install: the Wi-Fi NVRAM, system units, config
 brcmfmac-apple-resume/ the Wi-Fi driver patch and its DKMS package (built per kernel from the upstream source)
 docs/99-log.md         the full trail of what was tried and what each test showed

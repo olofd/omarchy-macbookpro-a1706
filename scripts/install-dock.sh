@@ -13,15 +13,13 @@
 set -eu
 [ "$(id -u)" -ne 0 ] || { echo "run as the user, not root" >&2; exit 1; }
 HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib.sh"
 AUTO=$HOME/.config/hypr/autostart.lua
 BEGIN="-- >>> mac-dock (omarchy-macbookpro-a1706 install-dock.sh)"
 END="-- <<< mac-dock"
 CMD="nwg-dock-hyprland -d -p left -i 24 -mb 2 -hd 0"
 
-strip() {
-  awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$AUTO" > "$AUTO.tmp.$$" &&
-    mv "$AUTO.tmp.$$" "$AUTO"
-}
+strip() { drop_block "$AUTO" "$BEGIN" "$END"; }
 
 if [ "${1:-}" = "--remove" ] || [ "${1:-}" = remove ]; then
   pkill -f '^nwg-dock-hyprland' || true
@@ -32,20 +30,20 @@ fi
 command -v nwg-dock-hyprland >/dev/null ||
   { echo "install it first: sudo pacman -S --needed nwg-dock-hyprland" >&2; exit 1; }
 
-mkdir -p "$HOME/.config/nwg-dock-hyprland" "$HOME/.cache"
-tr -d '\r' < "$HERE/../files/nwg-dock-style.css" > "$HOME/.config/nwg-dock-hyprland/style.css"
+mkdir -p "$HOME/.cache"
+put_file "$HERE/../files/nwg-dock-style.css" "$HOME/.config/nwg-dock-hyprland/style.css" 644
 # Pinned apps, by their .desktop names (ls /usr/share/applications ~/.local/share/applications). Kept if you
 # already have a list: edit ~/.cache/nwg-dock-pinned, or pin from the dock's right-click menu.
 [ -s "$HOME/.cache/nwg-dock-pinned" ] || printf '%s\n' chromium foot > "$HOME/.cache/nwg-dock-pinned"
 
-strip
-cat >> "$AUTO" <<EOF
-$BEGIN
+put_block "$AUTO" "$BEGIN" "$END" <<EOF
 -- The dock on the left edge (see install-dock.sh).
 o.exec_on_start("$CMD")
-$END
 EOF
 
+if [ "$CHANGED" = 0 ] && pgrep -f '^nwg-dock-hyprland' >/dev/null; then
+  echo "Dock: already up to date."; exit 0
+fi
 pkill -f '^nwg-dock-hyprland' || true
 sleep 1
 setsid -f $CMD >/dev/null 2>&1

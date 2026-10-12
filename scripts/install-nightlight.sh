@@ -7,6 +7,7 @@
 set -eu
 [ "$(id -u)" -ne 0 ] || { echo "run as the user, not root" >&2; exit 1; }
 HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib.sh"
 UNITS=$HOME/.config/systemd/user
 
 if [ "${1:-}" = "--remove" ] || [ "${1:-}" = remove ]; then
@@ -24,10 +25,8 @@ if [ "${1:-}" = "--remove" ] || [ "${1:-}" = remove ]; then
   exit 0
 fi
 
-mkdir -p "$HOME/.local/bin" "$UNITS"
-tr -d '\r' < "$HERE/nightlight-sun.py" > "$HOME/.local/bin/nightlight-sun"
-chmod 755 "$HOME/.local/bin/nightlight-sun"
-cat > "$UNITS/nightlight-sun.service" <<EOF
+put_file "$HERE/nightlight-sun.py" "$HOME/.local/bin/nightlight-sun" 755
+put_text "$UNITS/nightlight-sun.service" 644 <<EOF
 [Unit]
 Description=Night light from sunset to sunrise (omarchy-macbookpro-a1706 install-nightlight.sh)
 After=graphical-session.target
@@ -36,7 +35,7 @@ After=graphical-session.target
 Type=oneshot
 ExecStart=%h/.local/bin/nightlight-sun
 EOF
-cat > "$UNITS/nightlight-sun.timer" <<EOF
+put_text "$UNITS/nightlight-sun.timer" 644 <<EOF
 [Unit]
 Description=Update the night light times daily and at login
 
@@ -48,6 +47,9 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
+if [ "$CHANGED" = 0 ] && systemctl --user -q is-enabled nightlight-sun.timer 2>/dev/null; then
+  echo "Night light schedule: already up to date."; exit 0
+fi
 systemctl --user daemon-reload
 systemctl --user enable --now nightlight-sun.timer
 "$HOME/.local/bin/nightlight-sun"
