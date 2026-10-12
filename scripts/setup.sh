@@ -120,7 +120,7 @@ step "Summary"
 if [ -n "$FAILED" ]; then echo "Failed:$FAILED"; fi
 if [ -s "$REBOOT_FILE" ]; then
   echo "Reboot for: $(sort -u "$REBOOT_FILE" | paste -sd, - | sed 's/,/, /g')."
-  echo "Then run this again to continue:  sh scripts/setup.sh"
+  echo "Then run this again to continue:  sh $HERE/setup.sh"
 fi
 if [ -n "$WAITING" ]; then echo "Still to do:$WAITING"; fi
 if [ -z "$FAILED" ] && [ ! -s "$REBOOT_FILE" ] && [ -z "$WAITING" ]; then

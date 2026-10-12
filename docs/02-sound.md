@@ -29,5 +29,35 @@ What the script gets right, because the obvious way fails:
 **After the reboot:** `aplay -l` shows `CS8409/CS42L83 Analog`, PipeWire lists "Built-in Audio Analog Stereo".
 Turn the volume down before the first test: the speakers can be loud.
 
-**Limits (from the driver's own notes):** the microphone records very quietly, the sound does not match macOS's
-DSP, and `hw:0,0` devices have no volume control, so use PipeWire, not raw ALSA devices.
+**Limits (from the driver's own notes):** the sound does not match macOS's DSP, and `hw:0,0` devices have no
+volume control, so use PipeWire, not raw ALSA devices.
+
+## The microphone (fixed with a driver patch)
+
+**Symptom:** the built-in mic records quietly (speech peaking around -22 dBFS at a normal distance; -12 to -6
+is right for calls and dictation), and the mic slider changes nothing.
+
+**Cause:** the driver copies what OS X does: at boot and at **every capture start** it writes the mic's gain
+(codec node `0x22`) straight to the codec, always `0x27`, which is -12 dB (`0x33` is 0 dB, `0x3f` +12 dB, 1 dB
+steps). It bypasses the mixer, so `Internal Mic Capture Volume` showed +12 dB while the codec recorded at
+-12 dB. Check it while recording: `awk '/^Node 0x22 /,/^Node 0x23 /' /proc/asound/card0/codec#0 | grep Amp-In`.
+
+**Fix:**
+[`snd-hda-macbookpro/0001-internal-mic-gain-from-mixer.patch`](../snd-hda-macbookpro/0001-internal-mic-gain-from-mixer.patch)
+makes the driver take the gain from the mixer control instead. `install-sound.sh` applies it to the driver's
+source (for a new install, and to a driver installed before), rebuilds it and records which patches the
+installed module has, so DKMS's rebuilds for new kernels keep it. It also sets the mic's starting level to 63 %
+(`files/wireplumber-internal-mic.conf`, only for this sound card): with the gain now real, PipeWire's usual
+100 % would clip. On a Mac set up before this fix, set the level once (63 % here, change to taste):
+
+```sh
+pactl set-source-volume alsa_input.pci-0000_00_1f.3.analog-stereo 63%
+```
+
+**Result**, measured with a test tone played by the speakers and recorded by the mic, alternating the old and
+the new setting: **11 dB louder** at 63 % (-52.8 vs -41.8 dBFS), and each step of the mic slider now changes the
+level. The mic is digital, so the gain in the codec costs no quality compared with software gain.
+
+**A thump at every recording start** (up to -0.5 dBFS in the first half second, about -8 dBFS since the fix)
+comes from the capture path powering up; it is not fixed yet. Tools that measure the level should skip the
+first 0.6 s.

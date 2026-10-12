@@ -17,6 +17,11 @@ STAMP=$src/.omarchy-macbookpro-a1706-patches
 WANT=$(cat "$PATCHES"/*.patch 2>/dev/null | sha256sum | cut -d' ' -f1)
 cat /proc/asound/card*/codec#* 2>/dev/null | grep -qi cs8409 ||
   { echo "no CS8409 codec: this fix is not for this machine"; exit 0; }
+# The built-in mic's starting level (the mic patch makes the gain real: 100 % would clip). Not a reason to
+# rebuild the driver, so CHANGED is reset after it.
+put_file "$HERE/../files/wireplumber-internal-mic.conf" \
+  /etc/wireplumber/wireplumber.conf.d/60-a1706-internal-mic.conf 644
+CHANGED=0
 
 # apply_patches DIR: apply each of our patches that DIR does not have yet (CHANGED=1 if any); 1 if one fails.
 apply_patches() {
@@ -39,6 +44,8 @@ if dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro.*: installed'; then
   dkms build "$DKMS_NAME" -k "$(uname -r)" --force
   dkms install "$DKMS_NAME" -k "$(uname -r)" --force
   echo "$WANT" > "$STAMP"
+  echo "The built-in mic's level now works: about 63 % is right (as yourself:"
+  echo "  pactl set-source-volume alsa_input.pci-0000_00_1f.3.analog-stereo 63%   after the reboot)."
   needs_reboot "the patched sound driver"; exit 0
 fi
 

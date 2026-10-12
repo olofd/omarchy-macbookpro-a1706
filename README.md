@@ -18,7 +18,7 @@ on the machine, and every dead end that cost hours is written down too, so you c
 | Part | State | Notes |
 | --- | --- | --- |
 | Installer, boot, disk, keyboard, trackpad | works | The erase-disk install wipes the Touch Bar firmware: read [the install notes](docs/01-install.md) **before** you install |
-| Sound (speakers) | works | Community CS8409 driver via DKMS. Microphone is quiet. [docs/02-sound.md](docs/02-sound.md) |
+| Sound (speakers, microphone) | works | Community CS8409 driver via DKMS, with a patch for the mic's level. [docs/02-sound.md](docs/02-sound.md) |
 | 5 GHz Wi-Fi (BCM43602) | works at boot | Needs an NVRAM file. [docs/03-wifi.md](docs/03-wifi.md) |
 | Touch Bar, camera, ambient light sensor | works | Needs the T1 firmware restored. [docs/04-touchbar.md](docs/04-touchbar.md) |
 | Sleep (deep, S3) | works | Thunderbolt controllers removed around it, the T1 told after the wake; about 0.9 % battery per hour. [docs/05-sleep.md](docs/05-sleep.md) |
@@ -69,7 +69,7 @@ are only worth testing once Wi-Fi works.
 
 | Step | Check | Undo |
 | --- | --- | --- |
-| Sound | `aplay -l` lists `CS8409/CS42L83 Analog` | `sudo dkms remove snd_hda_macbookpro/0.1 --all`, `sudo rm -rf /usr/local/src/snd_hda_macbookpro`, reboot |
+| Sound | `aplay -l` lists `CS8409/CS42L83 Analog` | `sudo dkms remove snd_hda_macbookpro/0.1 --all`, `sudo rm -rf /usr/local/src/snd_hda_macbookpro /etc/wireplumber/wireplumber.conf.d/60-a1706-internal-mic.conf`, reboot |
 | Wi-Fi (5 GHz) | `iw phy \| grep -c 5180` prints more than 0 | `sudo sh scripts/install-wifi.sh remove`, reboot |
 | Touch Bar | `sudo t1bridge status` says `touchbar: ready` | `sudo pacman -Rns t1bridge t1bridge-dkms` and delete the `[standardagents]` lines from `/etc/pacman.conf`; the restored T1 firmware stays (it is Apple's) |
 | Sleep | `cat /sys/power/mem_sleep` shows `[deep]`; the lid closes and opens | `sudo sh scripts/install-sleep.sh remove`, reboot |

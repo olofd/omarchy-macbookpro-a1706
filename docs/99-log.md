@@ -13,6 +13,12 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
 - davidjo/snd_hda_macbookpro via DKMS from a temporary clone: `dkms status` said "broken"; fixed by keeping
   the source in `/usr/local/src`. Worked after a reboot.
 
+- Mic "too quiet": first measurements were wrong twice. With AirPods connected they were the default mic
+  (silence in A2DP); then every recording's first 0.6 s held a start-up thump near 0 dBFS. Speech after it:
+  peaks ~-22 dBFS. The driver writes the mic gain 0x27 (-12 dB) at every capture start, bypassing the mixer
+  (+12 dB shown). Patch: gain from the mixer's cached value. Tone test, old vs new (63 %): -52.8 vs -41.8 dBFS.
+- `dkms install --force` only reinstalls the module built before: a patched source needs `dkms build --force`.
+
 ## Touch Bar
 - Hardware layer showed `touchbar: ready` while the bar stayed black: the user service
   `t1-touchbar.service` was never enabled in the login session. Enabling it fixed it.
