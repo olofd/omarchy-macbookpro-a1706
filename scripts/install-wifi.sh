@@ -16,19 +16,20 @@ DEST=/usr/lib/firmware/updates/brcm/brcmfmac43602-pcie.txt
 NM=/etc/NetworkManager/conf.d/90-no-mac-random.conf
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo sh $0" >&2; exit 1; }
 
-if [ "${1:-}" = remove ]; then
+if [ "${1:-}" = remove ] || [ "${1:-}" = --remove ]; then
   rm -f "$DEST" "$NM"
-  [ -f /etc/modprobe.d/brcmfmac.conf ] && sed -i 's/^#\(options brcmfmac feature_disable\)/\1/' /etc/modprobe.d/brcmfmac.conf
+  [ -f /etc/modprobe.d/brcmfmac.conf ] &&
+    sed -i 's/^#\(options brcmfmac feature_disable\)/\1/' /etc/modprobe.d/brcmfmac.conf
   echo "Removed. Reboot to go back to 2.4 GHz-only Wi-Fi."
   exit 0
 fi
 case "${1:-}" in
   "") CCODE=X3; REGREV=15 ;;
   [A-Z][A-Z]|00) CCODE=$1; REGREV=0 ;;
-  *) echo "country must be two capital letters (e.g. SE), or nothing for the tested default" >&2; exit 2 ;;
+  *) echo "country must be two capital letters (e.g. SE) or 00, or nothing for the tested default" >&2; exit 2 ;;
 esac
 
-iface=$(ls /sys/class/net | grep '^wl' | head -n 1)
+iface=; for n in /sys/class/net/wl*; do [ -e "$n" ] && iface=${n##*/} && break; done
 [ -n "$iface" ] || { echo "no Wi-Fi interface found" >&2; exit 1; }
 # Without NVRAM the card reports Broadcom's placeholder (00:90:4c:...), likely the same on every such Mac: two of
 # them on one network would clash. Keep the address from an earlier run, else the card's own if it is real,
@@ -50,7 +51,8 @@ install -m 644 "$HERE/../files/nm-no-mac-random.conf" "$NM"
 # Omarchy runs the WPA handshake in software on Apple Wi-Fi (brcmfmac feature_disable=0x82000, a workaround for
 # WPA2/WPA3 transition networks). On this card the firmware's own handshake is what the tested Mac uses (with the
 # software one, early tests saw minutes of rejected joins), so Omarchy's line is commented out.
-[ -f /etc/modprobe.d/brcmfmac.conf ] && sed -i 's/^options brcmfmac feature_disable/#&/' /etc/modprobe.d/brcmfmac.conf
+[ -f /etc/modprobe.d/brcmfmac.conf ] &&
+  sed -i 's/^options brcmfmac feature_disable/#&/' /etc/modprobe.d/brcmfmac.conf
 # An NVRAM from an earlier version of this guide, in the old place, would be found second: say so.
 [ -f /usr/lib/firmware/brcm/brcmfmac43602-pcie.txt ] &&
   echo "note: an older copy is in /usr/lib/firmware/brcm/ (no longer used once this one exists; you can delete it)"

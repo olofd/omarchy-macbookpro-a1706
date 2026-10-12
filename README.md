@@ -34,20 +34,35 @@ On a fresh Omarchy install (2.4 GHz Wi-Fi or a USB Ethernet adapter is enough to
 and run the steps in order:
 
 ```sh
+omarchy update                                # first: a current Omarchy and kernel, then reboot
 git clone https://github.com/olofd/omarchy-macbookpro-a1706 && cd omarchy-macbookpro-a1706
 sudo sh scripts/install-sound.sh              # then reboot
 sudo sh scripts/install-wifi.sh               # NVRAM for 5 GHz (the tested values); then reboot
 sudo bash scripts/install-touchbar.sh         # mains power; restores the T1 firmware; log out/in after
 sudo tar -C /boot/EFI -czf efi-apple.tgz APPLE   # back up the restored T1 firmware; keep it off the machine
-sudo sh scripts/install-sleep.sh              # suspend; optional argument: a 2.4 GHz connection to fall back to
+sudo sh scripts/install-sleep.sh              # deep sleep; optional argument: a 2.4 GHz connection to fall back to
 sudo sh scripts/install-wifi-sleep-fix.sh     # patched Wi-Fi driver (DKMS) for 5 GHz and Bluetooth after sleep; reboot
 sudo sh scripts/install-light.sh              # automatic keyboard light and screen brightness
-sudo sh scripts/install-input.sh              # trackpad settings, added to your ~/.config/hypr/input.lua
+sh scripts/install-input.sh                   # trackpad settings, added to your ~/.config/hypr/input.lua
 sudo sh scripts/install-touchid.sh install    # optional: Touch ID; reboot, then the enroll and pam steps (docs/09)
 ```
 
 Do them in this order: the light sensor and Touch ID need the Touch Bar step (both sit on the T1), and the
 sleep steps are only worth testing once Wi-Fi works. The desktop extras (docs/10) can come any time.
+
+## Check and undo each step
+
+| Step | Check | Undo |
+| --- | --- | --- |
+| Sound | `aplay -l` lists `CS8409/CS42L83 Analog` | `sudo dkms remove snd_hda_macbookpro/0.1 --all`, `sudo rm -rf /usr/local/src/snd_hda_macbookpro`, reboot |
+| Wi-Fi (5 GHz) | `iw phy \| grep -c 5180` prints more than 0 | `sudo sh scripts/install-wifi.sh remove`, reboot |
+| Touch Bar | `sudo t1bridge status` says `touchbar: ready` | `sudo pacman -Rns t1bridge t1bridge-dkms` and delete the `[standardagents]` lines from `/etc/pacman.conf`; the restored T1 firmware stays (it is Apple's) |
+| Sleep | `cat /sys/power/mem_sleep` shows `[deep]`; the lid closes and opens | `sudo sh scripts/install-sleep.sh remove`, reboot |
+| Wi-Fi after sleep | `modinfo -F parm brcmfmac \| grep mac_efi_restore` | `sudo sh scripts/install-wifi-sleep-fix.sh remove`, reboot |
+| Light sensor | `systemctl is-active kbd-auto-backlight screen-auto-brightness` | `sudo sh scripts/install-light.sh remove` |
+| Trackpad | `hyprctl configerrors` is empty; two-finger scroll is natural | `sh scripts/install-input.sh remove` |
+| Touch ID | `sudo -k; sudo true` asks for your finger | `sudo sh scripts/install-touchid.sh unpam` (the packages: [docs/09](docs/09-touch-id.md)) |
+| Desktop extras | see [docs/10](docs/10-desktop-extras.md) | `sh scripts/install-<name>.sh remove` |
 
 ## Before you install anything
 
@@ -78,8 +93,8 @@ This builds on other people's work, linked where it is used: the CS8409 driver
 ([standardagents/t1bridge](https://github.com/standardagents/t1bridge)), the workspace overview
 ([itsmoorgrove/omarchy-overview](https://github.com/itsmoorgrove/omarchy-overview)), the dock
 ([nwg-piotr/nwg-dock-hyprland](https://github.com/nwg-piotr/nwg-dock-hyprland)), the Wi-Fi NVRAM
-([MikeRatcliffe's gist](https://gist.github.com/MikeRatcliffe/9614c16a8ea09731a9d5e91685bd8c80),
-[nohzafk/omarchy-macbookpro-t1](https://github.com/nohzafk/omarchy-macbookpro-t1)) and the state-of-Linux pages
+(t1-revive's, with values from [MikeRatcliffe's gist](https://gist.github.com/MikeRatcliffe/9614c16a8ea09731a9d5e91685bd8c80)
+and [nohzafk/omarchy-macbookpro-t1](https://github.com/nohzafk/omarchy-macbookpro-t1)) and the state-of-Linux pages
 ([Dunedan/mbp-2016-linux](https://github.com/Dunedan/mbp-2016-linux),
 [xtocdra/macbookpro13-2](https://github.com/xtocdra/macbookpro13-2)).
 

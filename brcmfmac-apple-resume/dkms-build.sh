@@ -13,7 +13,8 @@ set -eu
 KVER=${1:?usage: sh dkms-build.sh <kernel version>}
 HERE=$(cd "$(dirname "$0")" && pwd)
 KSRC=/lib/modules/$KVER/build
-if [ -w /var/cache ]; then CACHE=/var/cache/brcmfmac-apple-resume; else CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/brcmfmac-apple-resume; fi
+if [ -w /var/cache ]; then CACHE=/var/cache/brcmfmac-apple-resume
+else CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/brcmfmac-apple-resume; fi
 
 [ -f "$KSRC/.config" ] || { echo "no kernel headers for $KVER ($KSRC)" >&2; exit 1; }
 cfg() { sed -n "s/^$1=//p" "$KSRC/.config"; }
@@ -37,7 +38,8 @@ if [ ! -d "$SRC" ]; then
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   fetch https://github.com/gregkh/linux "$tmp/linux" ||
-    { rm -rf "$tmp/linux"; fetch https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git "$tmp/linux"; } ||
+    { rm -rf "$tmp/linux"
+      fetch https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git "$tmp/linux"; } ||
     { echo "could not fetch Linux v$UP (offline?). Run 'sudo dkms autoinstall' once online." >&2; exit 1; }
   # Fill the cache atomically: an interrupted copy must never be taken for a complete one.
   mkdir -p "$CACHE"
@@ -60,7 +62,8 @@ done
 # The same options as the kernel's own brcmfmac. The parent brcm80211/Makefile normally adds -DDEBUG for
 # CONFIG_BRCMDBG; building only brcmfmac/ needs it passed on, or debug.c fails to compile.
 set -- CONFIG_BRCMFMAC=m CONFIG_BRCMUTIL=m
-for o in BRCMFMAC_PROTO_BCDC BRCMFMAC_PROTO_MSGBUF BRCMFMAC_SDIO BRCMFMAC_USB BRCMFMAC_PCIE BRCMDBG BRCM_TRACING; do
+for o in BRCMFMAC_PROTO_BCDC BRCMFMAC_PROTO_MSGBUF BRCMFMAC_SDIO BRCMFMAC_USB BRCMFMAC_PCIE BRCMDBG \
+         BRCM_TRACING; do
   v=$(cfg "CONFIG_$o"); [ -n "$v" ] && set -- "$@" "CONFIG_$o=$v"
 done
 KCFLAGS=

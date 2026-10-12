@@ -11,6 +11,7 @@ DARK=3; DIM=30; ON=200; MID=90      # the same as files/kbd-auto-backlight.conf
 [ -r "$CONF" ] && . "$CONF"
 [ -n "$ALS" ] && [ -w "$LED/brightness" ] || { echo "no light sensor or keyboard light" >&2; exit 1; }
 
+MAX=$(cat $LED/max_brightness 2>/dev/null || echo 255)
 last=$(cat $LED/brightness); offset=0; smooth=
 while :; do
   cur=$(cat $LED/brightness)
@@ -22,7 +23,11 @@ while :; do
   if   [ "$smooth" -lt "$DARK" ]; then target=$ON
   elif [ "$smooth" -lt "$DIM" ];  then target=$MID
   else target=0; fi
-  target=$(( target + offset )); [ "$target" -lt 0 ] && target=0; [ "$target" -gt 255 ] && target=255
+  # The offset is kept inside what the light can show: unbounded, turning it off in the dark left it so far
+  # below the curve that brightness up in a bright room only paid it back and the light stayed off.
+  [ $(( target + offset )) -lt 0 ] && offset=$(( -target ))
+  [ $(( target + offset )) -gt "$MAX" ] && offset=$(( MAX - target ))
+  target=$(( target + offset ))
   if [ "$target" != "$cur" ]; then
     echo "light=$raw avg=$smooth -> $target" | logger -t kbd-auto-backlight
     echo "$target" > $LED/brightness

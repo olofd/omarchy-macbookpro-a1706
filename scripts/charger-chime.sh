@@ -11,12 +11,18 @@ VOLUME=0.35            # 0 to 1; lower is quieter (set it in ~/.config/charger-c
 if [ -r "$HOME/.config/charger-chime.conf" ]; then
   v=$(sed -n 's/^VOLUME=//p' "$HOME/.config/charger-chime.conf" | head -n 1); VOLUME=${v:-$VOLUME}
 fi
-mains() { for p in /sys/class/power_supply/*; do [ "$(cat $p/type 2>/dev/null)" = Mains ] && cat $p/online && return; done; }
+mains() {
+  for p in /sys/class/power_supply/*; do
+    [ "$(cat $p/type 2>/dev/null)" = Mains ] && cat $p/online && return
+  done
+}
 last=$(mains)
 udevadm monitor --udev --subsystem-match=power_supply 2>/dev/null | while read -r _; do
   now=$(mains)
   if [ -n "$now" ] && [ "$now" != "$last" ]; then
-    if [ "$now" = 1 ]; then pw-play --volume="$VOLUME" "$PLUG" >/dev/null 2>&1 & else pw-play --volume="$VOLUME" "$UNPLUG" >/dev/null 2>&1 & fi
+    if [ "$now" = 1 ]; then pw-play --volume="$VOLUME" "$PLUG" >/dev/null 2>&1 &
+    else pw-play --volume="$VOLUME" "$UNPLUG" >/dev/null 2>&1 &
+    fi
     last=$now
   fi
 done

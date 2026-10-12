@@ -12,8 +12,8 @@
 
 ## Trackpad
 
-`sudo sh scripts/install-input.sh` appends this to your `~/.config/hypr/input.lua` (Omarchy keeps personal
-overrides there; sudo is only used to find your user, or pass the user name as the argument):
+`sh scripts/install-input.sh` (as yourself, no sudo) appends this to your `~/.config/hypr/input.lua` (Omarchy
+keeps personal overrides there):
 
 ```lua
 hl.config({

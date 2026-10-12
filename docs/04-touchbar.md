@@ -33,7 +33,8 @@ What the script does, step by step, so you can follow it by hand:
 1. Checks you are on mains power and which USB ID the T1 has (`8600` = fine, `1281` = needs regenerating).
 2. Adds the t1bridge pacman repository after **verifying the signing key's fingerprint**
    (`35B166F7 8B063B04 DE1E3D91 3E6C4216 EB03D371`).
-3. Installs `t1bridge`, `t1bridge-dkms` and the build tools in one full `pacman -Syu` (never a partial upgrade).
+3. Installs `t1bridge`, `t1bridge-dkms`, `acpi_call-dkms` (for the wake call after a deep sleep, chapter 5)
+   and the build tools in one full `pacman -Syu` (never a partial upgrade).
    Omarchy blocks direct system upgrades outside `omarchy update`, so this one runs with
    `OMARCHY_ALLOW_DIRECT_PACMAN=1`; run `omarchy update` and reboot first.
 4. If the T1 is in recovery mode: clones and builds t1-revive (it builds its own patched libimobiledevice
@@ -62,6 +63,10 @@ Keep it **off the machine and out of git**: it holds data unique to this Mac. To
 - On kernel 6.19 and newer, two T2-oriented modules (`apple-ibridge-hid`, `apple-ib-touchbar`) can load by
   themselves and conflict with the older out-of-tree driver. They do not matter for t1bridge; if you use the
   older `apple-ibridge` DKMS setup instead, blacklist them.
+- **The Touch Bar stays dark after a deep sleep** (Touch ID too, while `t1bridge status` says ready): the T1
+  was not told the Mac is awake. `journalctl -t mac-sleep` should show `T1 wake call SOCW(1): 0x0` after each
+  wake; if not, check that `sudo modprobe acpi_call` works and that the sleep hook from chapter 5 is installed.
+  By hand: `sudo sh -c "printf '%s\\n' '\\_SB.PCI0.XHC1.RHUB.ASOC.SOCW 1' > /proc/acpi/call"`.
 - **The popups stop after a sleep** (t1bridge 0.1.12): the renderer no longer calls the provider after a wake.
   The sleep hook (chapter 5) restarts `t1-touchbar.service` 10 seconds after every wake. By hand:
   `systemctl --user restart t1-touchbar.service`.

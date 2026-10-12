@@ -22,8 +22,9 @@ What the script gets right, because the obvious way fails:
   the source folder, so building from a temporary directory leaves the module "broken" (`dkms status` says
   "Missing the module source directory").
 - It installs the kernel headers that match the running kernel (`linux-omarchy-headers` here).
-- If the driver does not build on a new kernel (6.17 changed the sound source layout), it tries the
-  [egorenar fork](https://github.com/egorenar/snd_hda_macbookpro).
+- If the driver does not build (6.17 changed the sound source layout), it tries the
+  [egorenar fork](https://github.com/egorenar/snd_hda_macbookpro). That choice is made when you run the
+  script; DKMS then rebuilds whichever one was installed for each new kernel.
 
 **After the reboot:** `aplay -l` shows `CS8409/CS42L83 Analog`, PipeWire lists "Built-in Audio Analog Stereo".
 Turn the volume down before the first test: the speakers can be loud.

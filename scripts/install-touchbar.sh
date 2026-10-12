@@ -23,7 +23,8 @@ say() { printf '\n== %s\n' "$*"; }
 say "Checks"
 grep -qs 1 /sys/class/power_supply/*/online || { echo "Plug in the charger first." >&2; exit 1; }
 if lsusb 2>/dev/null | grep -q "05ac:8600"; then echo "T1 already running (05ac:8600)."; T1_OK=1
-elif lsusb 2>/dev/null | grep -q "05ac:1281"; then echo "T1 is in recovery mode (05ac:1281): firmware will be regenerated."; T1_OK=0
+elif lsusb 2>/dev/null | grep -q "05ac:1281"; then
+  echo "T1 is in recovery mode (05ac:1281): firmware will be regenerated."; T1_OK=0
 else echo "No T1 chip found on USB: is this a 2016/2017 Touch Bar MacBook Pro?" >&2; exit 1; fi
 
 say "t1bridge package repository"
@@ -33,13 +34,16 @@ if ! grep -q '^\[standardagents\]' /etc/pacman.conf; then
   got=$(gpg --show-keys --with-colons "$d/k.asc" | awk -F: '$1=="fpr"{print $10; exit}')
   [ "$got" = "$KEY_FPR" ] || { echo "signing key fingerprint mismatch: $got" >&2; exit 1; }
   pacman-key --add "$d/k.asc"; pacman-key --lsign-key "$KEY_FPR"
-  printf '\n[standardagents]\nSigLevel = Required DatabaseRequired\nServer = https://linux.standardagents.ai/arch/$repo/$arch\n' >> /etc/pacman.conf
+  printf '\n[standardagents]\nSigLevel = Required DatabaseRequired\n%s\n' \
+    'Server = https://linux.standardagents.ai/arch/$repo/$arch' >> /etc/pacman.conf
 fi
 kpkg=$(pacman -Qqo "/usr/lib/modules/$(uname -r)/vmlinuz" 2>/dev/null) ||
-  { echo "the running kernel $(uname -r) is no longer installed (updated without a reboot): reboot first" >&2; exit 1; }
+  { echo "the running kernel $(uname -r) is no longer installed (updated without a reboot): reboot first" >&2
+    exit 1; }
 # One full transaction (-Syu): the new repository is synced and nothing is installed against stale package
 # lists, which would be a partial upgrade. Omarchy's guard asks for `omarchy update`; this is the same sync.
-OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu --needed --noconfirm base-devel dkms git "${kpkg}-headers" acpi_call-dkms \
+OMARCHY_ALLOW_DIRECT_PACMAN=1 pacman -Syu --needed --noconfirm \
+  base-devel dkms git "${kpkg}-headers" acpi_call-dkms \
   t1bridge t1bridge-dkms usbutils
 
 if [ "$T1_OK" = 0 ]; then
@@ -58,12 +62,13 @@ usermod -aG t1bridge "$U"
 systemctl daemon-reload
 systemctl enable t1-touchbar-hw.service
 # The renderer runs in the user's session; enable it for the user (it starts at every login).
-sudo -u "$U" env XDG_RUNTIME_DIR=/run/user/$(id -u "$U") systemctl --user enable --now t1-touchbar.service || \
+sudo -u "$U" env XDG_RUNTIME_DIR="/run/user/$(id -u "$U")" systemctl --user enable --now t1-touchbar.service || \
   echo "Log in graphically once, then run:  systemctl --user enable --now t1-touchbar.service"
 
 say "Volume, mute, media and brightness on the Touch Bar (Omarchy provider)"
 sudo -u "$U" install -d "$HOME_DIR/.local/bin" "$HOME_DIR/.config/systemd/user/t1-touchbar.service.d"
-sudo -u "$U" curl -fsSL https://raw.githubusercontent.com/niconistal/t1-revive/main/contrib/omarchy/t1bridge-omarchy-provider.sh \
+sudo -u "$U" curl -fsSL \
+  https://raw.githubusercontent.com/niconistal/t1-revive/main/contrib/omarchy/t1bridge-omarchy-provider.sh \
   -o "$HOME_DIR/.local/bin/t1bridge-omarchy-provider"
 chmod 755 "$HOME_DIR/.local/bin/t1bridge-omarchy-provider"
 printf '[Service]\nEnvironment=T1BRIDGE_DESKTOP_PROVIDER=%%h/.local/bin/t1bridge-omarchy-provider\n' \

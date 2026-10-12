@@ -25,6 +25,8 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
   removed the file. **Do not add such a failsafe.**
 - NVRAM `boardflags3=0xC0000303`, `ccode=SE`: connected, but joins failed for minutes after each boot.
   `boardflags3=0x00000300`, `ccode=00`: joins in ~9 s. (Values from another 13,2 owner's README.)
+- Final NVRAM default: `ccode=X3`, `regrev=15` (Broadcom's multi-country code, with the system's country applied on
+  top), and a random locally administered MAC (02:...) instead of Broadcom's placeholder, which every such Mac shares.
 
 ## Suspend
 - `deep`: no wake. `s2idle`: no wake either (hang before any resume log).
@@ -34,6 +36,16 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
 - Unload/reload brcmfmac in the hook: made it worse (card dead until reboot).
 - No hook for Wi-Fi: wake works, 5 GHz joins fail for minutes, 2.4 GHz joins at once.
 - Background processes in the hook were killed with the suspend service: use `systemd-run`.
+- `deep` again, with the Thunderbolt hook: `pm_test` platform and core pass, real S3 wakes. Wi-Fi back at the first
+  check. The Touch Bar and Touch ID stay dark (`t1bridge status` all ready); the ACPI call `ASOC.SOCW(1)` through
+  acpi_call (t1bridge issue #18) brings them back in ~90 ms. Now in the hook.
+- Battery, unplugged, lid closed: deep 216 mAh in 6.5 h (33 mA, 0.9 %/h); s2idle 82 % to empty in under 10 h
+  (over 300 mA; no low-power idle state on this Mac). Deep is the default since.
+- Typing after a wake was ~11 s late: the Thunderbolt rescan (~5 s per controller) ran inside the hook, and systemd
+  keeps the desktop frozen until all hooks end. Rescan detached: the desktop thaws ~0.1 s after the wake.
+- Touch Bar volume/brightness popups stopped after every wake (the renderer stops calling its desktop provider);
+  restarting `t1-touchbar.service` brings them back. A restart from inside the hook never ran (the user's
+  services are frozen then): it runs from a timer 10 s after the wake.
 
 ## Wi-Fi and Bluetooth after wake (fixed)
 - Non-DFS channel, firmware WPA handshake, MAC randomisation off, country re-send, `wpa_supplicant` restart: no change.
@@ -52,3 +64,5 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
 ## Light and input
 - Light sensor present as IIO `als`; scale 0 (covered) / ~16 (room) / 360-700 (flashlight).
 - `tap-to-click` set with `["tap-to-click"] = false` did nothing; `tap_to_click = false` works.
+- Auto-brightness ignored "brightness up" after the screen was turned down in a lit room and the lights went off:
+  the manual offset was unbounded. Clamped to the screen's range (the same fix for the keyboard light).

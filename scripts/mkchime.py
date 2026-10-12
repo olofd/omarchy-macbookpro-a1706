@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# Synthesise the two charger chimes (no copyrighted audio): python3 mkchime.py plug.wav unplug.wav
+# Made files/charger-plug.wav and files/charger-unplug.wav (install-chime.sh installs those).
 import math, struct, wave, sys
 SR = 44100
 def bell(freq, dur, amp=0.5):

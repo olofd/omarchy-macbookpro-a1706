@@ -57,8 +57,8 @@ sh scripts/install-chime.sh
 
 A soft two-note bell when the charger is plugged in and a softer one when it is pulled, like macOS (a user
 service listening to `udevadm monitor --subsystem-match=power_supply`). The sound is synthesised by
-`scripts/mkchime.py`, so there is no copyrighted audio in the repository. Volume: `VOLUME=0.2` (0 to 1) in
-`~/.config/charger-chime.conf`.
+`scripts/mkchime.py`, so there is no copyrighted audio in the repository. Volume: 0.35 by default; set e.g.
+`VOLUME=0.2` (0 to 1) in `~/.config/charger-chime.conf`.
 
 ## Check the time zone and Wi-Fi country
 

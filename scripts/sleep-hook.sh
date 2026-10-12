@@ -16,7 +16,8 @@ tb_devices() {
     [ "$(cat "$p/vendor" 2>/dev/null)" = 0x8086 ] || continue
     case "$(cat "$p/class" 2>/dev/null)" in 0x0880*|0x0c03*) ;; *) continue ;; esac
     case "$(cat "$p/device" 2>/dev/null)" in
-      0x1575|0x1577|0x15b5|0x15b6|0x15bf|0x15c1|0x15d2|0x15d4|0x15d9|0x15db|0x15dc|0x15dd|0x15de|0x15e8|0x15e9|0x15eb|0x15ec)
+      0x1575|0x1577|0x15b5|0x15b6|0x15bf|0x15c1|0x15d2|0x15d4|0x15d9|0x15db|0x15dc|0x15dd|0x15de|\
+      0x15e8|0x15e9|0x15eb|0x15ec)
         echo "$p" ;;
     esac
   done
@@ -27,6 +28,8 @@ case "$1" in
     # A wake check still running from the last wake (lid opened and closed within ~25 s) would otherwise block
     # this wake's check (same unit name) and resume after the next wake with stale timing.
     systemctl stop wifi-recover.service 2>/dev/null
+    # The same for the Touch Bar restart a wake less than 10 s ago scheduled (it would fire mid-sleep or after).
+    systemctl stop t1-touchbar-restart.timer t1-touchbar-restart.service 2>/dev/null
     # A Thunderbolt rescan from the last wake still running (lid closed again within ~10 s): let it finish, so the
     # controllers it brings back are removed below.
     i=0; while systemctl is-active --quiet mac-tb-rescan.service && [ $i -lt 30 ]; do sleep 0.5; i=$((i + 1)); done
@@ -36,12 +39,13 @@ case "$1" in
       [ "$(cat "$d/idVendor" 2>/dev/null)" = 05ac ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = 8600 ] &&
         echo disabled > "$d/power/wakeup"
     done
-    iface=$(ls /sys/class/net | grep '^wl' | head -n 1)
+    iface=; for n in /sys/class/net/wl*; do [ -e "$n" ] && iface=${n##*/} && break; done
     mkdir -p /var/log/wake-diag
     { echo "pre-sleep $(date '+%F %T')"
       nmcli -t -f DEVICE,STATE,CONNECTION device 2>&1 | grep '^wl'
       iw dev 2>&1 | grep -E 'ssid|channel'
-      [ -n "$iface" ] && echo "brcmfmac loaded=$(lsmod | grep -c '^brcmfmac ') power=$(cat "/sys/class/net/$iface/device/power_state" 2>&1)"
+      [ -n "$iface" ] && echo "brcmfmac loaded=$(lsmod | grep -c '^brcmfmac ')" \
+        "power=$(cat "/sys/class/net/$iface/device/power_state" 2>&1)"
     } > /var/log/wake-diag/last-pre-sleep.log 2>&1
     # The light services are stopped (and only the ones that ran are started again after).
     : > /run/mac-sleep-lights
@@ -79,10 +83,14 @@ case "$1" in
     for s in $(cat /run/mac-sleep-lights 2>/dev/null); do systemctl start "$s"; done
     # The rescan takes ~5 s per Thunderbolt controller, and the desktop stays frozen until this hook ends: run it
     # detached, so the keyboard works at once and the USB-C ports follow ~10 s later.
+    # If the unit name is still taken (a rescan from the last wake outlived the wait in pre), rescan inline.
     systemd-run --no-block --collect --unit=mac-tb-rescan \
-      sh -c 'echo 1 > /sys/bus/pci/rescan; modprobe thunderbolt' >/dev/null 2>&1
+      sh -c 'echo 1 > /sys/bus/pci/rescan; modprobe thunderbolt' >/dev/null 2>&1 || {
+      logger -t mac-sleep "could not start mac-tb-rescan detached: rescanning inline"
+      echo 1 > /sys/bus/pci/rescan; modprobe thunderbolt 2>/dev/null; }
     # Wi-Fi check and wake log, detached: a background child would be killed when the suspend service ends.
-    systemd-run --no-block --collect --unit=wifi-recover /usr/local/sbin/wifi-recover >/dev/null 2>&1
+    systemd-run --no-block --collect --unit=wifi-recover /usr/local/sbin/wifi-recover >/dev/null 2>&1 ||
+      logger -t mac-sleep "could not start wifi-recover"
     # The Touch Bar renderer (t1bridge 0.1.12) stops calling its desktop provider after a wake, so the volume and
     # brightness popups stop until it restarts. Restart it, for each user running it, 10 s after the wake: systemd
     # keeps the users' services frozen until every sleep hook has finished, so the hook cannot do it itself.
@@ -90,7 +98,7 @@ case "$1" in
       for u in $(loginctl list-users --no-legend | awk "{print \$2}"); do
         systemctl --user -M "$u@" is-active --quiet t1-touchbar.service &&
           systemctl --user -M "$u@" restart t1-touchbar.service
-      done' >/dev/null 2>&1
+      done' >/dev/null 2>&1 || logger -t mac-sleep "could not schedule the Touch Bar renderer restart"
     ;;
 esac
 exit 0

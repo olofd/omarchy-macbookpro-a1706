@@ -1,16 +1,17 @@
 Subject: [PATCH] wifi: brcmfmac: pcie: restore the Apple EFI chip setup after a resume
 
 On Macs with a BCM43602 (MacBookPro13,x and 14,x), 5 GHz joins fail
-after a resume from s2idle (the firmware answers SET_SSID with status 1,
-reported by the driver as status 16) and Bluetooth, which shares the
-antennas, stutters on 2.4 GHz. After a cold boot both work.
+after a resume from s2idle or S3 (the firmware answers SET_SSID with
+status 1, reported by the driver as status 16) and Bluetooth, which
+shares the antennas, stutters on 2.4 GHz. After a cold boot both work.
 
-The chip loses power during s2idle. brcmf_pcie_pm_leave_D3() then finds
-intmask 0 and re-probes, which re-downloads the firmware onto a chip at
-its power-on defaults. At a cold boot, however, Apple's EFI has already
-set part of the chip up before Linux runs, and the firmware relies on it
-without ever doing it itself. Register dumps at probe (before the
-watchdog reset) and once the firmware is up show, cold boot vs. resume:
+The chip loses power during system sleep. brcmf_pcie_pm_leave_D3() then
+finds intmask 0 and re-probes, which re-downloads the firmware onto a
+chip at its power-on defaults. At a cold boot, however, Apple's EFI has
+already set part of the chip up before Linux runs, and the firmware
+relies on it without ever doing it itself. Register dumps at probe
+(before the watchdog reset) and once the firmware is up show, cold boot
+vs. resume:
 
   gpioouten    0x00007007 vs 0x00000007   (GPIO 12-14 never become outputs)
   gpioout      0x00006006 vs 0x00000006   (GPIO 13-14 never driven high)
@@ -27,8 +28,8 @@ subsystem vendor are touched (other Apple cards are untested); the
 module parameter mac_efi_restore=0 turns it off.
 
 Tested on a MacBookPro13,2 (BCM43602, firmware 7.35.177.61, kernel
-7.2.5): after a resume 5 GHz joins at the first attempt and Bluetooth
-A2DP plays cleanly; before, every 5 GHz join failed.
+7.2.5): after a resume (s2idle and S3) 5 GHz joins at the first attempt
+and Bluetooth A2DP plays cleanly; before, every 5 GHz join failed.
 ---
 --- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
 +++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
@@ -39,7 +40,7 @@ A2DP plays cleanly; before, every 5 GHz join failed.
 +/* On Macs, Apple's EFI sets part of the chip up before Linux starts, and the
 + * firmware relies on it but never does it itself: on the BCM43602 of the
 + * MacBookPro13,x/14,x, GPIO 12-14 as outputs (13 and 14 high), chipcontrol
-+ * bits 0x00400090 and the indirect chipcontrol registers. During s2idle the
++ * bits 0x00400090 and the indirect chipcontrol registers. During sleep the
 + * chip loses power, so after a resume brcmf_pcie_pm_leave_D3() re-probes a
 + * chip at its power-on defaults: 5 GHz joins then fail (SET_SSID status
 + * 1) and Bluetooth, which shares the antennas, stutters.

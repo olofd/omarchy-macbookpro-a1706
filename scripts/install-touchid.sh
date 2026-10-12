@@ -7,9 +7,11 @@
 #   sudo sh install-touchid.sh install    the matched pair libfprint-t1bridge + fprintd-t1bridge, the user in group
 #                                     t1bridge, the Touch ID sockets, machine data from /boot, and a firewall
 #                                     opening for the T1's xART port 61500 on the T1 link only. Then REBOOT.
-#   sh install-touchid.sh enroll [FINGER] as the user, in the desktop (default right-index-finger): touch the sensor
-#                                     again and again until "enroll-completed", then a verify must say "verify-match"
-#   sudo sh install-touchid.sh pam        Touch ID for sudo and for Polkit prompts (3 tries in 15 s, then the password);
+#   sh install-touchid.sh enroll [FINGER] as the user, in the desktop (default right-index-finger): touch the
+#                                     sensor again and again until "enroll-completed", then a verify must say
+#                                     "verify-match"
+#   sudo sh install-touchid.sh pam        Touch ID for sudo and for Polkit prompts (3 tries in 15 s, then the
+#                                     password);
 #                                     safe to run again: it replaces its own earlier lines
 #   sudo sh install-touchid.sh unpam      undo the PAM step (backups restored)
 #   sudo sh install-touchid.sh status     what is there now
@@ -20,7 +22,8 @@
 set -eu
 cmd=${1:-}
 U=${SUDO_USER:-$(id -un)}
-LINE="# Touch ID (omarchy-macbookpro-a1706 install-touchid.sh); password still works after it\nauth       sufficient   pam_fprintd.so max-tries=3 timeout=15"
+LINE="# Touch ID (omarchy-macbookpro-a1706 install-touchid.sh); password still works after it"
+LINE="$LINE\nauth       sufficient   pam_fprintd.so max-tries=3 timeout=15"
 
 need_root() { [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo sh $0 $cmd" >&2; exit 1; }; }
 t1_if() { # the T1's private network link, found by its driver (not by a name like eth0)
@@ -61,7 +64,8 @@ case "$cmd" in
     systemctl daemon-reload
     systemctl enable t1-touchid-auth.socket t1bridge-fingerprint.socket
     # Machine data (FDRData) from the Apple EFI folder on /boot; an empty import was issue #29's blocker.
-    t1bridge machine-data import --from /boot || echo "WARNING: machine-data import failed; see: sudo t1bridge status" >&2
+    t1bridge machine-data import --from /boot ||
+      echo "WARNING: machine-data import failed; see: sudo t1bridge status" >&2
     IF=$(t1_if)
     if [ -n "$IF" ] && command -v ufw >/dev/null; then
       # xART: IPv6 TCP 61500 from the link-local T1 only, on the T1 link only. Never on Wi-Fi/LAN.
@@ -78,7 +82,8 @@ case "$cmd" in
     echo "Touch the Touch ID button with your $F, lift, touch again ... until it says enroll-completed."
     if ! fprintd-enroll -f "$F"; then
       echo "Enrollment failed. The first try often fails while the T1's keybag is prepared (journalctl -b -u" >&2
-      echo "t1-touchid-auth shows 'prepare device keybag failed'). Run: sudo systemctl restart t1-touchid-auth.service" >&2
+      echo "t1-touchid-auth shows 'prepare device keybag failed')." >&2
+      echo "Run: sudo systemctl restart t1-touchid-auth.service" >&2
       echo "and then this again. Use fprintd-delete \"\$USER\" -f $F first if the finger shows up as enrolled." >&2
       exit 1
     fi
@@ -88,7 +93,8 @@ case "$cmd" in
   pam)
     need_root
     fprintd-list "$U" | grep -q -- "-finger" || { echo "no enrolled finger for $U: run enroll first" >&2; exit 1; }
-    [ -f /usr/lib/pam.d/polkit-1 ] || [ -f /etc/pam.d/polkit-1 ] || { echo "no polkit PAM file found" >&2; exit 1; }
+    [ -f /usr/lib/pam.d/polkit-1 ] || [ -f /etc/pam.d/polkit-1 ] ||
+      { echo "no polkit PAM file found" >&2; exit 1; }
     if [ ! -f /etc/pam.d/polkit-1 ] || [ -f /etc/pam.d/polkit-1.created-by-touchid ]; then
       # Polkit's own file lives in /usr/lib/pam.d; a copy in /etc/pam.d takes precedence and survives updates.
       [ -f /usr/lib/pam.d/polkit-1 ] || { echo "no /usr/lib/pam.d/polkit-1 to start from" >&2; exit 1; }
@@ -108,7 +114,8 @@ case "$cmd" in
   unpam)
     need_root
     [ -f /etc/pam.d/sudo.before-touchid ] && mv /etc/pam.d/sudo.before-touchid /etc/pam.d/sudo
-    [ -f /etc/pam.d/polkit-1.created-by-touchid ] && rm -f /etc/pam.d/polkit-1 /etc/pam.d/polkit-1.created-by-touchid
+    [ -f /etc/pam.d/polkit-1.created-by-touchid ] &&
+      rm -f /etc/pam.d/polkit-1 /etc/pam.d/polkit-1.created-by-touchid
     [ -f /etc/pam.d/polkit-1.before-touchid ] && mv /etc/pam.d/polkit-1.before-touchid /etc/pam.d/polkit-1
     echo "Touch ID removed from sudo and Polkit (enrolled fingers stay; fprintd-delete removes them)."
     ;;

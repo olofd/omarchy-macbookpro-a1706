@@ -40,6 +40,7 @@ every second or two with a moving average so a hand passing over it does not cha
   A curve from dark (`MIN`) through a room (`ROOM`) to daylight (`MAXB`), eased two steps per second so it
   never jumps. Tune by creating `/etc/screen-auto-brightness.conf` (not installed; the defaults are at the top of
   `scripts/screen-auto-brightness.sh`: `MIN`, `ROOM`, `MAXB`, `DARKLUX`, `ROOMLUX`, `SUNLUX`, `STEP`).
+- After changing either file: `sudo systemctl restart kbd-auto-backlight screen-auto-brightness`.
 
 **Manual changes keep working.** If you change the brightness by hand (the Touch Bar keys), the service sees
 a value it did not set and keeps the difference as an **offset**: it still follows the room light, but

@@ -8,21 +8,31 @@
 #    20 s after the wake, the 2.4 GHz connection you name here (optional). The real fix for Wi-Fi after
 #    sleep is the driver patch, install-wifi-sleep-fix.sh (docs/06-wifi-after-sleep.md).
 #   sudo sh install-sleep.sh [FALLBACK-2.4GHZ-CONNECTION-NAME]
+#   sudo sh install-sleep.sh remove      undo (then reboot; without the hook, suspend hangs again)
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 F=$HERE/../files
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo sh $0" >&2; exit 1; }
 
+case "${1:-}" in remove|--remove)
+  rm -f /usr/lib/systemd/system-sleep/mac-sleep /usr/local/sbin/wifi-recover /etc/wifi-recover.conf \
+    /etc/tmpfiles.d/mem-sleep.conf
+  echo "Removed. Reboot to go back to the kernel's default sleep mode (it hangs without the hook)."
+  exit 0 ;;
+esac
+
 # acpi_call, for the T1 wake call after a deep sleep (a DKMS module; Arch/Omarchy package acpi_call-dkms)
 if ! modprobe acpi_call 2>/dev/null; then
-  command -v pacman >/dev/null && pacman -S --needed --noconfirm acpi_call-dkms
-  modprobe acpi_call 2>/dev/null || echo "note: acpi_call is missing; without it the Touch Bar stays dark after a deep sleep" >&2
+  command -v pacman >/dev/null && { pacman -S --needed --noconfirm acpi_call-dkms || true; }
+  modprobe acpi_call 2>/dev/null ||
+    echo "note: acpi_call is missing; without it the Touch Bar stays dark after a deep sleep" >&2
 fi
 install -m 644 "$F/mem-sleep.conf" /etc/tmpfiles.d/mem-sleep.conf
 install -m 755 "$HERE/sleep-hook.sh" /usr/lib/systemd/system-sleep/mac-sleep
 install -m 755 "$HERE/wifi-recover.sh" /usr/local/sbin/wifi-recover
 # The name is stored as data and read back as data (never run as shell code): SSIDs can contain anything.
 if [ -n "${1:-}" ]; then printf 'FALLBACK=%s\n' "$1" > /etc/wifi-recover.conf; fi
-sed -i 's/\r$//' /etc/tmpfiles.d/mem-sleep.conf /usr/lib/systemd/system-sleep/mac-sleep /usr/local/sbin/wifi-recover
+sed -i 's/\r$//' /etc/tmpfiles.d/mem-sleep.conf /usr/lib/systemd/system-sleep/mac-sleep \
+  /usr/local/sbin/wifi-recover
 systemd-tmpfiles --create /etc/tmpfiles.d/mem-sleep.conf
 echo "Done. Test: save your work, unmount any USB-C drive, close the lid, wait a minute, open it."

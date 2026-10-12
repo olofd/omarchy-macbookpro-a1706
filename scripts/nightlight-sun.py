@@ -83,7 +83,8 @@ def render(sunrise, sunset, label):
             "# Night light %d K from sunset to sunrise; rewritten daily, edits here are replaced.\n"
             "profile {\n    time = %s\n    identity = true\n}\n\n"
             "profile {\n    time = %s\n    temperature = %d\n}\n"
-            % (label, dt.date.today().isoformat(), NIGHT_TEMP, sunrise.strftime("%H:%M"), sunset.strftime("%H:%M"), NIGHT_TEMP))
+            % (label, dt.date.today().isoformat(), NIGHT_TEMP, sunrise.strftime("%H:%M"),
+               sunset.strftime("%H:%M"), NIGHT_TEMP))
 
 
 def main():
@@ -97,7 +98,8 @@ def main():
         print("nightlight-sun: no sunrise/sunset today at %s; nothing changed" % label)
         return 0
     sunrise, sunset = times
-    print("%s (%.3f, %.3f): sunrise %s, sunset %s" % (label, lat, lon, sunrise.strftime("%H:%M"), sunset.strftime("%H:%M")))
+    print("%s (%.3f, %.3f): sunrise %s, sunset %s"
+          % (label, lat, lon, sunrise.strftime("%H:%M"), sunset.strftime("%H:%M")))
     if "--print" in sys.argv:
         return 0
     new = render(sunrise, sunset, label)
@@ -110,7 +112,8 @@ def main():
             fh.write(old)
     with open(CONF, "w") as fh:
         fh.write(new)
-    subprocess.run(["omarchy", "restart", "hyprsunset"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["omarchy", "restart", "hyprsunset"], check=False,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print("hyprsunset updated")
     return 0
 

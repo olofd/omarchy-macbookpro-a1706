@@ -26,10 +26,11 @@ STEAL="com.anthropic.Claude"   # window classes (hyprctl clients) that steal foc
 
 strip() { # file: remove our block
   [ -f "$1" ] || return 0
-  awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$1" > "$1.tmp.$$" && mv "$1.tmp.$$" "$1"
+  awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$1" > "$1.tmp.$$" &&
+    mv "$1.tmp.$$" "$1"
 }
 
-if [ "${1:-}" = "--remove" ]; then
+if [ "${1:-}" = "--remove" ] || [ "${1:-}" = remove ]; then
   strip "$HYPR/input.lua"; strip "$HYPR/bindings.lua"; strip "$HYPR/hyprland.lua"
   omarchy plugin disable "$ID" >/dev/null 2>&1 || true
   omarchy plugin remove "$ID" --yes >/dev/null 2>&1 || true

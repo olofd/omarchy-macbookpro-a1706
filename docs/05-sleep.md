@@ -16,7 +16,8 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
    either: both modes hang for the same reason (step 4). With that fixed, both work, and **`deep` is the one
    to use** (see [Deep or s2idle](#deep-or-s2idle) below).
 2. **The NVMe fix Omarchy ships** (`d3cold_allowed=0` on the NVMe controller) is already applied by the
-   installer for these models. Check: `cat /sys/bus/pci/devices/0000:01:00.0/d3cold_allowed` prints `0`.
+   installer for these models. Check: `cat /sys/bus/pci/devices/0000:01:00.0/d3cold_allowed` prints `0`
+   (`01:00.0` on this Mac; find yours with `lspci | grep -i nvme`).
 3. **Bisect with `pm_test`.** The kernel can run the suspend steps one at a time and resume by itself after
    5 seconds, which turns a hang into a pass/fail per stage:
 
@@ -40,16 +41,19 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
      switch the keyboard backlight off and remember its level (it stays lit during sleep otherwise); stop the
      light-sensor services; disable wake-up by the T1 (USB `05ac:8600`), which otherwise wakes the Mac a few
      seconds into sleep; write `/var/log/wake-diag/last-pre-sleep.log`.
-   - `post`: restore the backlight and the light services, `echo 1 > /sys/bus/pci/rescan` to bring the
-     controllers back, and start `/usr/local/sbin/wifi-recover` (chapter 6) with `systemd-run`; 10 seconds later,
-     restart the Touch Bar renderer (`t1-touchbar.service`), whose volume and brightness popups stop after a wake.
+   - `post`: after a deep sleep, tell the T1 the Mac is awake (the ACPI call `SOCW(1)`, see
+     [Deep or s2idle](#deep-or-s2idle)); restore the backlight and the light services; `echo 1 >
+     /sys/bus/pci/rescan` and `modprobe thunderbolt` to bring the controllers back; start
+     `/usr/local/sbin/wifi-recover` (chapter 6) with `systemd-run`; 10 seconds later, restart the Touch Bar
+     renderer (`t1-touchbar.service`), whose volume and brightness popups stop after a wake.
 
-   The rescan runs detached: it takes about 5 seconds per controller, and systemd keeps the desktop frozen
-   until every sleep hook has finished, so run inline it delayed typing after a wake by 10 seconds.
+   The rescan runs detached (`systemd-run`): it takes about 5 seconds per controller, and systemd keeps the
+   desktop frozen until every sleep hook has finished, so run inline it delayed typing by 10 seconds after
+   every wake.
 
-   The USB-C ports come back after wake (about 10 seconds after it); an adapter plugged in during sleep is picked up by the rescan. The
-   controllers are found by vendor, device ID and class, not by address, so the hook works if they sit elsewhere
-   on your model.
+   The USB-C ports come back about 10 seconds after a wake; an adapter plugged in during sleep is picked up by
+   the rescan. The controllers are found by vendor, device ID and class, not by address, so the hook works if
+   they sit elsewhere on your model.
 
    **Unmount USB-C drives before closing the lid.** The USB-C ports hang off these controllers, so a drive is cut
    off at every sleep (the hook syncs first and logs a warning, `journalctl -t mac-sleep`, if one was mounted).
@@ -94,7 +98,7 @@ Touch Bar and Touch ID stay dark (everything reports ready). macOS and Windows c
 an EC hard reset that leaves the T1 stuck in recovery mode.
 
 To go back to s2idle: `echo s2idle | sudo tee /sys/power/mem_sleep` (until the next boot), or change the line
-in `/etc/tmpfiles.d/mem-sleep.conf`.
+in `/etc/tmpfiles.d/mem-sleep.conf` (running `install-sleep.sh` again sets it back to deep).
 
 ## Hibernate
 

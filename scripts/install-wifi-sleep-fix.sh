@@ -16,7 +16,7 @@ SRC=$HERE/../$NAME
 DEST=/usr/src/$NAME-$VER
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo sh $0" >&2; exit 1; }
 
-if [ "${1:-}" = remove ]; then
+if [ "${1:-}" = remove ] || [ "${1:-}" = --remove ]; then
   dkms remove "$NAME/$VER" --all 2>/dev/null || true
   rm -rf "$DEST" "/var/cache/$NAME"
   depmod -a
@@ -38,7 +38,8 @@ fi
 for t in dkms git patch make; do
   command -v "$t" >/dev/null || { echo "$t is missing: install it, then run this again" >&2; exit 1; }
 done
-lspci -nd 14e4: 2>/dev/null | grep -q . || echo "note: no Broadcom PCI device found; this fix is for Macs with a BCM43602"
+lspci -nd 14e4: 2>/dev/null | grep -q . ||
+  echo "note: no Broadcom PCI device found; this fix is for Macs with a BCM43602"
 
 # An earlier hand-built brcmfmac in updates/ would shadow the DKMS one: keep it aside.
 for f in "/lib/modules/$KVER/updates/brcmfmac.ko" "/lib/modules/$KVER/updates/brcmfmac.ko.zst"; do
@@ -55,4 +56,5 @@ dkms install "$NAME/$VER" -k "$KVER"
 depmod -a "$KVER"
 echo "Installed. Reboot, then check:  modinfo -F parm brcmfmac | grep mac_efi_restore"
 echo "After a sleep the log shows:     journalctl -k -b | grep \"restored the chip setup\""
-echo "A new kernel rebuilds it automatically (it needs internet once). If that happened offline: sudo dkms autoinstall"
+echo "A new kernel rebuilds it automatically (it needs internet once)."
+echo "If that happened offline: sudo dkms autoinstall"

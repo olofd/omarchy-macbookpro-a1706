@@ -18,15 +18,19 @@ BEGIN="-- >>> mac-dock (omarchy-macbookpro-a1706 install-dock.sh)"
 END="-- <<< mac-dock"
 CMD="nwg-dock-hyprland -d -p left -i 24 -mb 2 -hd 0"
 
-strip() { awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$AUTO" > "$AUTO.tmp.$$" && mv "$AUTO.tmp.$$" "$AUTO"; }
+strip() {
+  awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1;next} $0==e{skip=0;next} !skip' "$AUTO" > "$AUTO.tmp.$$" &&
+    mv "$AUTO.tmp.$$" "$AUTO"
+}
 
-if [ "${1:-}" = "--remove" ]; then
+if [ "${1:-}" = "--remove" ] || [ "${1:-}" = remove ]; then
   pkill -f '^nwg-dock-hyprland' || true
   strip
   echo "Dock removed from startup and stopped."
   exit 0
 fi
-command -v nwg-dock-hyprland >/dev/null || { echo "install it first: sudo pacman -S --needed nwg-dock-hyprland" >&2; exit 1; }
+command -v nwg-dock-hyprland >/dev/null ||
+  { echo "install it first: sudo pacman -S --needed nwg-dock-hyprland" >&2; exit 1; }
 
 mkdir -p "$HOME/.config/nwg-dock-hyprland" "$HOME/.cache"
 tr -d '\r' < "$HERE/../files/nwg-dock-style.css" > "$HOME/.config/nwg-dock-hyprland/style.css"

@@ -9,7 +9,7 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 UNITS=$HOME/.config/systemd/user
 
-if [ "${1:-}" = "--remove" ]; then
+if [ "${1:-}" = "--remove" ] || [ "${1:-}" = remove ]; then
   systemctl --user disable --now nightlight-sun.timer 2>/dev/null || true
   rm -f "$UNITS/nightlight-sun.service" "$UNITS/nightlight-sun.timer" "$HOME/.local/bin/nightlight-sun"
   systemctl --user daemon-reload
