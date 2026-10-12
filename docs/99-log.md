@@ -18,6 +18,9 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
   peaks ~-22 dBFS. The driver writes the mic gain 0x27 (-12 dB) at every capture start, bypassing the mixer
   (+12 dB shown). Patch: gain from the mixer's cached value. Tone test, old vs new (63 %): -52.8 vs -41.8 dBFS.
 - `dkms install --force` only reinstalls the module built before: a patched source needs `dkms build --force`.
+- Thump at every recording start: only after the mic was powered down (a recording within PipeWire's suspend
+  delay is clean); a DC step that clips 0.1 s and drains over ~0.5 s. Muting the input amp until 0.54 s showed no
+  step at the unmute, so the step is before the amp: second patch keeps it muted 500 ms after a capture start.
 
 ## Touch Bar
 - Hardware layer showed `touchbar: ready` while the bar stayed black: the user service
@@ -66,6 +69,14 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
   chipcontrol bits 0x00400090 and chipcontrol register 2 differ from a cold boot: EFI set them, the firmware never does.
 - Patch saving EFI's setup at the first probe and restoring it at a resume probe: 5 GHz at the first attempt
   ~13 s after wake, Bluetooth clean. Packaged as DKMS (brcmfmac-apple-resume).
+
+## Power
+- Frame buffer compression was off ("VT-d enabled": Skylake workaround while the graphics are behind the IOMMU).
+  `intel_iommu=igfx_off`: FBC enabled. The saving is too small to measure next to normal app load.
+- ACPI interrupt (GPE07, the EC) at ~83/s, on battery as well as on the charger (kernel bug 198169 says AC
+  only). EC trace: SMBus alarms (query 0x10) about 3.5/s from address 0x0a, the smart battery manager that the
+  kernel ignores on Macs; each costs ~9 EC transactions. It is ~1.3 % of all interrupts (6,300/s, mostly the
+  timer for busy apps), so not worth a kernel patch.
 
 ## Light and input
 - Light sensor present as IIO `als`; scale 0 (covered) / ~16 (room) / 360-700 (flashlight).
