@@ -6,7 +6,10 @@
 #    is told the Mac is awake (ACPI ASOC.SOCW, through acpi_call), or the Touch Bar and Touch ID stay dark,
 #  - wifi-recover after every wake: a diagnostic log in /var/log/wake-diag, and if Wi-Fi is not back about
 #    20 s after the wake, the 2.4 GHz connection you name here (optional). The real fix for Wi-Fi after
-#    sleep is the driver patch, install-wifi-sleep-fix.sh (docs/06-wifi-after-sleep.md).
+#    sleep is the driver patch, install-wifi-sleep-fix.sh (docs/06-wifi-after-sleep.md),
+#  - when hibernation is set up (Omarchy's installer makes a swapfile and a resume device): the lid does
+#    suspend-then-hibernate, deep sleep that turns into hibernation after 12 hours on battery. Wi-Fi survives
+#    the restore only with the driver patch (install-wifi-sleep-fix.sh, patch 0002).
 #   sudo sh install-sleep.sh [FALLBACK-2.4GHZ-CONNECTION-NAME]
 #   sudo sh install-sleep.sh remove      undo (then reboot; without the hook, suspend hangs again)
 set -eu
@@ -17,7 +20,9 @@ F=$HERE/../files
 
 case "${1:-}" in remove|--remove)
   rm -f /usr/lib/systemd/system-sleep/mac-sleep /usr/local/sbin/wifi-recover /etc/wifi-recover.conf \
-    /etc/tmpfiles.d/mem-sleep.conf
+    /etc/tmpfiles.d/mem-sleep.conf /etc/systemd/sleep.conf.d/50-a1706-hibernate.conf \
+    /etc/systemd/logind.conf.d/50-a1706-lid.conf
+  systemctl reload systemd-logind 2>/dev/null || true
   echo "Removed. Reboot to go back to the kernel's default sleep mode (it hangs without the hook)."
   exit 0 ;;
 esac
@@ -37,6 +42,21 @@ if [ -n "${1:-}" ]; then
 FALLBACK=$1
 EOF
 fi
-[ "$CHANGED" = 1 ] || { echo "Sleep: already up to date."; exit 0; }
+SLEEP_CHANGED=$CHANGED; CHANGED=0
+# Suspend-then-hibernate, only where the kernel can resume from a hibernation image.
+if grep -qw disk /sys/power/state && [ "$(cat /sys/power/resume 2>/dev/null)" != 0:0 ]; then
+  put_file "$F/sleep-then-hibernate.conf" /etc/systemd/sleep.conf.d/50-a1706-hibernate.conf 644
+  put_file "$F/logind-lid.conf" /etc/systemd/logind.conf.d/50-a1706-lid.conf 644
+  [ -e /usr/src/brcmfmac-apple-resume-1.0/0002-brcmfmac-pcie-survive-restoring-from-hibernation.patch ] ||
+    echo "note: without the Wi-Fi driver patch (install-wifi-sleep-fix.sh), Wi-Fi is gone after a hibernation"
+else
+  echo "No hibernation set up (no resume device): the lid stays on plain suspend."
+  for f in /etc/systemd/sleep.conf.d/50-a1706-hibernate.conf /etc/systemd/logind.conf.d/50-a1706-lid.conf; do
+    [ -e "$f" ] && rm -f "$f" && CHANGED=1
+  done
+fi
+# logind reads its configuration again on reload (no restart: that would end the session).
+[ "$CHANGED" = 1 ] && systemctl reload systemd-logind
+[ "$SLEEP_CHANGED" = 1 ] || [ "$CHANGED" = 1 ] || { echo "Sleep: already up to date."; exit 0; }
 systemd-tmpfiles --create /etc/tmpfiles.d/mem-sleep.conf
 echo "Done. Test: save your work, unmount any USB-C drive, close the lid, wait a minute, open it."

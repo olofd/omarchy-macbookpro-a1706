@@ -86,6 +86,15 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
   Signaled Target Abort; the BAR0 window moved from `0x18003000` to `0x18001000` (Apple's EFI used the chip).
   Still all ones after 335 ms. A PERST# pulse through RP12's ACPI method `DRST`: chip answers, re-probe, firmware
   up, 5 GHz. No power cycle (`DPWR`) needed. Verified again with the final patch.
+- Suspend-then-hibernate with a 2-minute test delay, on battery: the RTC woke the Mac from deep sleep after
+  exactly 2 minutes, the hook ran post then pre, hibernation, power-off, restore with Wi-Fi on 5 GHz (that
+  time the chip answered without the reset). The 12-hour setting went in with `SuspendEstimationSec=12h`.
+
+## Thunderbolt after deep sleep (open)
+- Some deep-sleep wakes leave the Thunderbolt controllers powered off: "pcieport 0000:03:00.0: Unable to change
+  power state from D3hot to D0, device inaccessible", the rescan takes 35-60 s and finds no NHI or USB
+  controller; the USB-C ports are dead until a reboot (charging still works). Seen in two boots (one without
+  any hibernation); in another boot every wake brought them back after ~11 s.
 
 ## Power
 - Frame buffer compression was off ("VT-d enabled": Skylake workaround while the graphics are behind the IOMMU).

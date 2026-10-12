@@ -106,6 +106,23 @@ Omarchy's installer sets up a swapfile and the resume offset, so `systemctl hibe
 off, and the next power-on (after the disk password) restores the session. Hibernate uses no power, where deep
 sleep uses a little (fine overnight, not for a week in a bag).
 
+**Closing the lid: deep sleep, then hibernation after 12 hours.** When hibernation is set up (a resume device,
+as Omarchy's installer makes), `install-sleep.sh` sets the lid to `suspend-then-hibernate`
+([`files/logind-lid.conf`](../files/logind-lid.conf)) with
+[`files/sleep-then-hibernate.conf`](../files/sleep-then-hibernate.conf): after 12 hours of deep sleep on
+battery the Mac wakes by itself (RTC alarm), hibernates and powers off, so a forgotten Mac never runs flat.
+Within 12 hours it wakes as fast as before. On the charger it stays in deep sleep; the 12 hours start when the
+charger is unplugged. The battery is measured only at the 12-hour mark (`SuspendEstimationSec=12h`): the
+default wakes the Mac every hour to measure it, and each wake runs the whole sleep hook. The sleep hook runs
+for both halves (the wake in between brings Thunderbolt back, the hibernation removes it again). To try it
+without waiting 12 hours (unplug the charger first; the file in `/run` is gone at the next boot):
+
+```sh
+sudo mkdir -p /run/systemd/sleep.conf.d
+printf '[Sleep]\nHibernateDelaySec=2min\nSuspendEstimationSec=2min\n' | sudo tee /run/systemd/sleep.conf.d/99-test.conf
+systemctl suspend-then-hibernate     # sleeps, wakes by itself after 2 minutes, hibernates, powers off
+```
+
 With the stock driver, Wi-Fi was gone after every restore until a reboot: Apple's EFI leaves the Wi-Fi chip
 unreachable in the boot that restores the image. The driver patch of the next chapter resets the chip at that
 point; `journalctl -k -b | grep "ACPI DRST"` shows when it did. The details are in
