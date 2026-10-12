@@ -27,7 +27,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-REBOOT_FILE=$(mktemp)
+# In the user's runtime folder: root may not write a user's file in /tmp (fs.protected_regular).
+REBOOT_FILE=$(mktemp -p "${XDG_RUNTIME_DIR:-/tmp}")
 FAILED=; WAITING=
 trap 'rm -f "$REBOOT_FILE"' EXIT
 step() { printf '\n== %s\n' "$*"; }

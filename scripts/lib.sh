@@ -62,7 +62,7 @@ drop_block() {
 # needs_reboot WHAT: say that WHAT takes effect after a reboot, and tell setup.sh (A1706_REBOOT_FILE) too.
 needs_reboot() {
   echo "Reboot for $1 to take effect."
-  if [ -n "${A1706_REBOOT_FILE:-}" ]; then echo "$1" >> "$A1706_REBOOT_FILE"; fi
+  if [ -n "${A1706_REBOOT_FILE:-}" ]; then echo "$1" >> "$A1706_REBOOT_FILE" || true; fi
 }
 
 # usb_present VENDOR:PRODUCT (e.g. 05ac:8600): is that USB device there? Read from /sys, so it needs no lsusb.

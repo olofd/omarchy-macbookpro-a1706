@@ -12,6 +12,9 @@ PATCHES=$HERE/../snd-hda-macbookpro
 # DKMS links to the source folder, so it must stay (a temporary one leaves it "broken").
 src=/usr/local/src/snd_hda_macbookpro
 DKMS_NAME=snd_hda_macbookpro/0.1
+# Which of our patches the installed module was built with (a patched source alone proves nothing).
+STAMP=$src/.omarchy-macbookpro-a1706-patches
+WANT=$(cat "$PATCHES"/*.patch 2>/dev/null | sha256sum | cut -d' ' -f1)
 cat /proc/asound/card*/codec#* 2>/dev/null | grep -qi cs8409 ||
   { echo "no CS8409 codec: this fix is not for this machine"; exit 0; }
 
@@ -29,8 +32,13 @@ apply_patches() {
 if dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro.*: installed'; then
   [ -d "$src" ] || { echo "Sound: installed, but its source $src is gone; patches not checked" >&2; exit 0; }
   apply_patches "$src" || { echo "a patch did not apply to $src" >&2; exit 1; }
-  [ "$CHANGED" = 1 ] || { echo "Sound: already installed (with this guide's patches)."; exit 0; }
+  if [ "$CHANGED" = 0 ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$WANT" ]; then
+    echo "Sound: already installed (with this guide's patches)."; exit 0
+  fi
+  # build --force really rebuilds (install --force alone reinstalls the module built before).
+  dkms build "$DKMS_NAME" -k "$(uname -r)" --force
   dkms install "$DKMS_NAME" -k "$(uname -r)" --force
+  echo "$WANT" > "$STAMP"
   needs_reboot "the patched sound driver"; exit 0
 fi
 
@@ -44,6 +52,7 @@ for repo in https://github.com/davidjo/snd_hda_macbookpro.git \
   git clone --depth 1 "$repo" "$src"
   apply_patches "$src" || { echo "A patch did not apply to $repo, trying the next." >&2; continue; }
   if (cd "$src" && sh ./install.cirrus.driver.sh -i); then
+    echo "$WANT" > "$STAMP"
     echo "Installed from $repo."; needs_reboot "the sound driver"; exit 0
   fi
   echo "Build from $repo failed, trying the next." >&2
