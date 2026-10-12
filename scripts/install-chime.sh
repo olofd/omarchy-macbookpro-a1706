@@ -17,8 +17,8 @@ if [ "${1:-}" = "--remove" ] || [ "${1:-}" = remove ]; then
 fi
 . "$HERE/lib.sh"
 put_file "$HERE/charger-chime.sh" "$HOME/.local/bin/charger-chime" 755
-put_file "$HERE/../files/charger-plug.wav" "$HOME/.local/share/charger-chime/plug.wav" 644
-put_file "$HERE/../files/charger-unplug.wav" "$HOME/.local/share/charger-chime/unplug.wav" 644
+put_bin "$HERE/../files/charger-plug.wav" "$HOME/.local/share/charger-chime/plug.wav" 644
+put_bin "$HERE/../files/charger-unplug.wav" "$HOME/.local/share/charger-chime/unplug.wav" 644
 put_file "$HERE/../files/charger-chime.service" "$HOME/.config/systemd/user/charger-chime.service" 644
 if [ "$CHANGED" = 0 ] && systemctl --user -q is-active charger-chime.service; then
   echo "Charger chime: already up to date."; exit 0

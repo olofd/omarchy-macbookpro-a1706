@@ -4,7 +4,8 @@
 # shellcheck disable=SC2034  # read by the installers that source this file
 CHANGED=0
 
-# put_file SRC DEST MODE: install SRC (carriage returns removed) as DEST with MODE (e.g. 755), if different.
+# put_file SRC DEST MODE: install the text file SRC (carriage returns removed) as DEST with MODE (e.g. 755), if
+# different. Never for binary files: removing carriage-return bytes corrupts them (use put_bin).
 put_file() {
   _pf=$(mktemp)
   tr -d '\r' < "$1" > "$_pf"
@@ -12,6 +13,14 @@ put_file() {
   mkdir -p "$(dirname "$2")"
   install -m "$3" "$_pf" "$2"
   rm -f "$_pf"
+  CHANGED=1
+}
+
+# put_bin SRC DEST MODE: like put_file for binary files (sounds, images): copied byte for byte.
+put_bin() {
+  if [ -f "$2" ] && cmp -s "$1" "$2" && [ "$(stat -c %a "$2")" = "$3" ]; then return 0; fi
+  mkdir -p "$(dirname "$2")"
+  install -m "$3" "$1" "$2"
   CHANGED=1
 }
 
