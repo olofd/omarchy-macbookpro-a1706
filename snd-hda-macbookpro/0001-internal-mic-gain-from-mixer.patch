@@ -1,0 +1,33 @@
+Internal mic: use the mixer's level instead of OS X's fixed -12 dB
+
+cs_8409_intmike_volume_setup() is called at boot and at every capture start with the gain OS X uses, 0x27
+(-12 dB; the amp's 0 dB is 0x33, its maximum 0x3f = +12 dB, 1 dB steps). It writes the codec directly, so the
+"Internal Mic Capture Volume" control, which PipeWire sets to its maximum, kept showing +12 dB while the codec
+recorded at -12 dB: speech came in about 24 dB too quiet and the mixer had no effect.
+
+Take the gain from the control's cached value (snd_hda_codec_amp_read) instead. The mixer then works, and the
+default level is the control's. Tested on a MacBookPro13,2 (CS8409/CS42L83), kernel 7.2.5.
+
+For github.com/davidjo/snd_hda_macbookpro (and the egorenar fork), patch_cirrus/patch_cirrus_real84.h.
+Applied by scripts/install-sound.sh (patch -p1 in the driver's source folder).
+---
+--- a/patch_cirrus/patch_cirrus_real84.h
++++ b/patch_cirrus/patch_cirrus_real84.h
+@@ -286,9 +286,17 @@
+ {
+         int retgain;
+         int newgain;
++        int mixer;
+ 
+         struct cs8409_apple_spec *spec = codec->spec;
+ 
++        // Use the level of the "Internal Mic Capture Volume" mixer control (its cached value) instead of the
++        // fixed gain OS X uses (0x27, -12 dB). With the fixed gain the mic was far too quiet and the mixer had
++        // no effect: it showed up to +12 dB while the codec stayed at -12 dB from every capture start on.
++        mixer = snd_hda_codec_amp_read(codec, spec->intmike_adc_nid, 0, HDA_INPUT, 0);
++        if (mixer >= 0)
++                volume = mixer & HDA_AMP_VOLMASK;
++
+         // plausibly AppleHDAWidget::setWidgetAmplifierGain
+ 
+         //retgain = snd_hda_codec_read_check(codec, 0x22, 0, AC_VERB_GET_AMP_GAIN_MUTE, 0x00002000, 0x00000033, 0); // 0x022b2000

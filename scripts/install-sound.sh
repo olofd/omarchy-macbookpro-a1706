@@ -1,26 +1,48 @@
 #!/bin/sh
 # Sound on the A1706 (Cirrus Logic CS8409): the in-kernel driver loads but the speakers stay silent.
-# Builds the community driver (davidjo/snd_hda_macbookpro) with DKMS so it is rebuilt on kernel updates.
-#   sudo sh install-sound.sh        then reboot. Safe to run again.
+# Builds the community driver (davidjo/snd_hda_macbookpro) with DKMS so it is rebuilt on kernel updates, with
+# this guide's patches from snd-hda-macbookpro/ applied (the internal mic's level).
+#   sudo sh install-sound.sh        then reboot. Safe to run again: an installed driver only gets the patches
+#                                   it is missing (and a rebuild then).
 set -eu
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo sh $0" >&2; exit 1; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib.sh"
+PATCHES=$HERE/../snd-hda-macbookpro
+# DKMS links to the source folder, so it must stay (a temporary one leaves it "broken").
+src=/usr/local/src/snd_hda_macbookpro
+DKMS_NAME=snd_hda_macbookpro/0.1
 cat /proc/asound/card*/codec#* 2>/dev/null | grep -qi cs8409 ||
   { echo "no CS8409 codec: this fix is not for this machine"; exit 0; }
-dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro.*: installed' &&
-  { echo "Sound: already installed."; exit 0; }
+
+# apply_patches DIR: apply each of our patches that DIR does not have yet (CHANGED=1 if any); 1 if one fails.
+apply_patches() {
+  for p in "$PATCHES"/*.patch; do
+    [ -f "$p" ] || continue
+    patch -d "$1" -p1 -R --dry-run --force --fuzz=0 < "$p" >/dev/null 2>&1 && continue   # already in
+    patch -d "$1" -p1 --forward --batch --fuzz=0 --no-backup-if-mismatch < "$p" || return 1
+    echo "applied ${p##*/}"
+    CHANGED=1
+  done
+}
+
+if dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro.*: installed'; then
+  [ -d "$src" ] || { echo "Sound: installed, but its source $src is gone; patches not checked" >&2; exit 0; }
+  apply_patches "$src" || { echo "a patch did not apply to $src" >&2; exit 1; }
+  [ "$CHANGED" = 1 ] || { echo "Sound: already installed (with this guide's patches)."; exit 0; }
+  dkms install "$DKMS_NAME" -k "$(uname -r)" --force
+  needs_reboot "the patched sound driver"; exit 0
+fi
 
 kpkg=$(pacman -Qqo "/usr/lib/modules/$(uname -r)/vmlinuz" 2>/dev/null) ||
   { echo "the running kernel $(uname -r) is no longer installed (updated without a reboot): reboot first" >&2
     exit 1; }
 pacman -S --needed --noconfirm base-devel dkms git wget patch "${kpkg}-headers"
-# DKMS links to the source folder, so it must stay (a temporary one leaves it "broken").
-src=/usr/local/src/snd_hda_macbookpro
 for repo in https://github.com/davidjo/snd_hda_macbookpro.git \
             https://github.com/egorenar/snd_hda_macbookpro.git; do
   rm -rf "$src"
   git clone --depth 1 "$repo" "$src"
+  apply_patches "$src" || { echo "A patch did not apply to $repo, trying the next." >&2; continue; }
   if (cd "$src" && sh ./install.cirrus.driver.sh -i); then
     echo "Installed from $repo."; needs_reboot "the sound driver"; exit 0
   fi
