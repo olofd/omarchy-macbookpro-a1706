@@ -14,6 +14,7 @@
 # ID to sudo (keep a root shell open while you test that).
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib.sh"
 [ "$(id -u)" -ne 0 ] || { echo "run it as your user (it uses sudo itself): sh $0" >&2; exit 1; }
 [ -n "${WAYLAND_DISPLAY:-}" ] || { echo "run it from a terminal in the desktop" >&2; exit 1; }
 FALLBACK=; TOUCHID=1; EXTRAS=1
@@ -37,7 +38,7 @@ try() { _n=$1; shift; "$@" || { echo "!! $_n failed (see above)"; FAILED="$FAILE
   - $_n"; }; }
 wait_for() { echo "Waits for: $2"; WAITING="$WAITING
   - $1 (after $2)"; }
-t1_running() { lsusb 2>/dev/null | grep -q '05ac:8600'; }
+t1_running() { usb_present 05ac:8600; }
 light_sensor() { grep -qs '^als$' /sys/bus/iio/devices/iio:device*/name; }
 
 model=$(cat /sys/class/dmi/id/product_name 2>/dev/null || echo unknown)

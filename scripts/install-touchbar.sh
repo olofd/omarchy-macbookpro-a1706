@@ -19,11 +19,12 @@ U=${1:-${SUDO_USER:-}}
 HOME_DIR=$(getent passwd "$U" | cut -d: -f6)
 KEY_FPR=35B166F78B063B04DE1E3D913E6C4216EB03D371
 say() { printf '\n== %s\n' "$*"; }
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 say "Checks"
 grep -qs 1 /sys/class/power_supply/*/online || { echo "Plug in the charger first." >&2; exit 1; }
-if lsusb 2>/dev/null | grep -q "05ac:8600"; then echo "T1 already running (05ac:8600)."; T1_OK=1
-elif lsusb 2>/dev/null | grep -q "05ac:1281"; then
+if usb_present 05ac:8600; then echo "T1 already running (05ac:8600)."; T1_OK=1
+elif usb_present 05ac:1281; then
   echo "T1 is in recovery mode (05ac:1281): firmware will be regenerated."; T1_OK=0
 else echo "No T1 chip found on USB: is this a 2016/2017 Touch Bar MacBook Pro?" >&2; exit 1; fi
 

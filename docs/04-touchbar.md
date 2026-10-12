@@ -1,6 +1,6 @@
 # 4. Touch Bar, camera and ambient light sensor (the T1 chip)
 
-**Symptom:** the Touch Bar is dark, the FaceTime camera and Touch ID do not exist, `lsusb` shows
+**Symptom:** the Touch Bar is dark, the FaceTime camera and Touch ID do not exist, `lsusb` (package `usbutils`) shows
 `05ac:1281 Apple Mobile Device [Recovery Mode]` instead of `05ac:8600 Apple iBridge`.
 
 **Cause:** the T1 (Apple's "iBridge" chip) runs its own OS and **has no firmware in ROM**. macOS writes the

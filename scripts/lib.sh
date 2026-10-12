@@ -64,3 +64,11 @@ needs_reboot() {
   echo "Reboot for $1 to take effect."
   if [ -n "${A1706_REBOOT_FILE:-}" ]; then echo "$1" >> "$A1706_REBOOT_FILE"; fi
 }
+
+# usb_present VENDOR:PRODUCT (e.g. 05ac:8600): is that USB device there? Read from /sys, so it needs no lsusb.
+usb_present() {
+  for _u in /sys/bus/usb/devices/*; do
+    [ "$(cat "$_u/idVendor" 2>/dev/null):$(cat "$_u/idProduct" 2>/dev/null)" = "$1" ] && return 0
+  done
+  return 1
+}
