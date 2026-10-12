@@ -43,9 +43,10 @@ if dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro.*: installed'; then
   # build --force really rebuilds (install --force alone reinstalls the module built before).
   dkms build "$DKMS_NAME" -k "$(uname -r)" --force
   dkms install "$DKMS_NAME" -k "$(uname -r)" --force
+  # A driver from before the mic patch: its mic level was stored while the slider did nothing (often 100 %).
+  [ -n "$(cat "$STAMP" 2>/dev/null)" ] || echo "The mic slider works now: set it to about 85 % after the reboot" \
+    "(as yourself: pactl set-source-volume alsa_input.pci-0000_00_1f.3.analog-stereo 85%)."
   echo "$WANT" > "$STAMP"
-  echo "The built-in mic's level now works: about 85 % is right (as yourself:"
-  echo "  pactl set-source-volume alsa_input.pci-0000_00_1f.3.analog-stereo 85%   after the reboot)."
   needs_reboot "the patched sound driver"; exit 0
 fi
 
