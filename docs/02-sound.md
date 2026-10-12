@@ -60,6 +60,11 @@ normal distance, speech peaked around -27 dBFS at 63 %, around -9 (highest -4, n
 -13 to -8 at **85 %**, the right range for calls and dictation; the signal-to-noise ratio stays about 26 dB (the
 mic is digital, so the gain in the codec adds no noise compared with software gain).
 
-**A thump at every recording start** (up to -0.5 dBFS in the first half second, about -8 dBFS since the fix)
-comes from the capture path powering up; it is not fixed yet. Tools that measure the level should skip the
-first 0.6 s.
+**A thump at every recording start (fixed by a second patch).** When a recording starts while the mic was
+powered down (PipeWire powers it down a few seconds after the last recording), its path powers up and the
+samples jump to full scale and drain back over about half a second: the first 0.1 s of every recording was
+clipped at 0 dBFS, which cut off the first word of a dictation. The jump happens before the input amp, and the
+driver unmuted that amp at once.
+[`snd-hda-macbookpro/0002-internal-mic-settle-before-unmute.patch`](../snd-hda-macbookpro/0002-internal-mic-settle-before-unmute.patch)
+keeps it muted for the first 500 ms (module parameter `intmike_settle_ms`; 0 turns it off): a recording now
+starts with half a second of silence instead. When dictating, start talking a moment after the key.

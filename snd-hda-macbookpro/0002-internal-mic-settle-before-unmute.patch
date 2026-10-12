@@ -1,0 +1,84 @@
+Internal mic: unmute only after its path has settled (no thump at a capture start)
+
+When a capture starts, the internal mic's path powers up and its samples jump to full scale and drain back over
+about half a second (a DC step through a high-pass filter): every recording started with a thump that clipped
+its first 0.1 s (MacBookPro13,2, mic at 85 %: 100 ms at 0 dBFS, back to the noise floor after ~0.52 s). It only
+happens when the mic was powered down (a second recording within PipeWire's suspend delay is clean).
+
+The driver unmutes the input amp (node 0x22) right after starting the stream. Muting it for the first 0.54 s
+of a recording showed no step at the unmute: the step happens before the amp. So keep the amp muted after a
+capture start and unmute from delayed work, intmike_settle_ms later (default 500; 0 = unmute at once as
+before). The first half second of a recording is silence instead of the thump. The work is cancelled when the
+capture stops and when the codec is freed.
+
+For github.com/davidjo/snd_hda_macbookpro (and the egorenar fork), after
+0001-internal-mic-gain-from-mixer.patch. Applied by scripts/install-sound.sh.
+---
+--- a/patch_cirrus/patch_cirrus_apple.h
++++ b/patch_cirrus/patch_cirrus_apple.h
+@@ -1739,8 +1739,11 @@
+ // cs_free is just a definition
+ //#define cs_8409_apple_free		snd_hda_gen_free
+ 
++static void cs_8409_intmike_settle_cancel(void);
++
+ void cs_8409_apple_free(struct hda_codec *codec)
+ {
++	cs_8409_intmike_settle_cancel();
+ #if 0
+         struct cs8409_spec *spec = codec->spec;
+ 
+--- a/patch_cirrus/patch_cirrus_real84.h
++++ b/patch_cirrus/patch_cirrus_real84.h
+@@ -239,6 +239,29 @@
+         cs_8409_volume_unmute(codec, spec->intmike_adc_nid);
+ }
+ 
++// The internal mic's path takes about half a second to settle after it powers up at a capture start: the
++// samples jump to full scale and drain back (a DC step through a high-pass filter), a thump that clipped the
++// first 0.1 s of every recording. The step happens before the input amp, so keeping the amp muted until it
++// has settled removes it (MacBookPro13,2: muted until 0.54 s, no step at the unmute).
++static unsigned int intmike_settle_ms = 500;
++module_param(intmike_settle_ms, uint, 0644);
++MODULE_PARM_DESC(intmike_settle_ms, "Apple: keep the internal mic muted for this long after a capture start (ms, 0 = off)");
++
++static struct hda_codec *cs_8409_settle_codec;
++
++static void cs_8409_intmike_settled(struct work_struct *work)
++{
++        if (cs_8409_settle_codec)
++                cs_8409_intmike_volume_unmute(cs_8409_settle_codec);
++}
++
++static DECLARE_DELAYED_WORK(cs_8409_intmike_settle_work, cs_8409_intmike_settled);
++
++static void cs_8409_intmike_settle_cancel(void)
++{
++        cancel_delayed_work_sync(&cs_8409_intmike_settle_work);
++}
++
+ static void cs_8409_linein_volume_unmute(struct hda_codec *codec)
+ {
+         struct cs8409_apple_spec *spec = codec->spec;
+@@ -3302,7 +3325,11 @@
+         cs_8409_intmike_volume_setup(codec, 0x27);
+         cs_8409_intmike_stream_on_nid(codec);
+ 
+-        cs_8409_intmike_volume_unmute(codec);
++        if (intmike_settle_ms) {
++                cs_8409_settle_codec = codec;
++                schedule_delayed_work(&cs_8409_intmike_settle_work, msecs_to_jiffies(intmike_settle_ms));
++        } else
++                cs_8409_intmike_volume_unmute(codec);
+         cs_8409_linein_volume_unmute(codec);
+ 
+         // so here we get AMP_GAIN_MUTE setups but nothing changes
+@@ -3366,6 +3393,8 @@
+         //int retval;
+         struct cs8409_apple_spec *spec = codec->spec;
+ 
++        cs_8409_intmike_settle_cancel();
++
+ 
+         // so I have seen an UNSOL response in cs_8409_playstop_real
+         // which suggests need to block responses here
