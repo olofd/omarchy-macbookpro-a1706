@@ -69,6 +69,33 @@ GitHub mirror, or git.kernel.org), caches it in `/var/cache/brcmfmac-apple-resum
 it with the kernel's own configuration. It is the same approach as the sound driver
 (chapter 2).
 
+## After hibernation
+
+Restoring a hibernation image (chapter 5) is a different failure: the card does not come back at all, until a
+reboot. The kernel log shows `brcmf_chip_recognition: MMIO read failed: 0xffffffff` and `probe after resume
+failed, err=-19` (the stock driver first reports a firmware crash, and can oops).
+
+A driver build that logged the card's PCI state at every step showed why. At the restore the card is on the
+bus as before (its ID, BARs, memory decoding and the link are all unchanged), but its status register shows
+**Signaled Target Abort**: the chip rejects every read of its registers, and waiting does not help. Its
+register window had moved too, so Apple's EFI had used the chip in the boot that loaded the image, and left it
+in a state that a cold boot or an S3 resume never shows. The driver then made it worse: it read the all-ones
+mailbox as a firmware crash, and that crash handling raced the re-probe.
+
+The Mac's ACPI table has the method macOS resets the card with: `DRST` on the card's root port (`RP12`), which
+drives its reset line (PERST#). One pulse brings the chip back at its power-on defaults, and it then probes as
+at a cold boot. The second patch,
+[`0002-brcmfmac-pcie-survive-restoring-from-hibernation.patch`](../brcmfmac-apple-resume/0002-brcmfmac-pcie-survive-restoring-from-hibernation.patch):
+
+- At a restore, if the chip reads all ones and the root port has `DRST`, it pulses it, waits for the card and
+  puts its PCI configuration back. It logs `chip did not answer after the restore: reset it (ACPI DRST)`.
+- A restore always re-probes the card (the firmware is never still running then), and `.thaw` (after the image
+  is written, or when hibernating fails) wakes the card as after a suspend, where it used to stay in D3.
+- While the card is down, its interrupt handler no longer reads the mailbox and console, so a chip answering all
+  ones is not taken for a crashed firmware.
+
+With it, Wi-Fi is back on 5 GHz right after the restore. `install-wifi-sleep-fix.sh` installs both patches.
+
 ## How it was found
 
 1. A driver that logs the firmware's real answer (the stock driver reports every failed join as status 16 and an

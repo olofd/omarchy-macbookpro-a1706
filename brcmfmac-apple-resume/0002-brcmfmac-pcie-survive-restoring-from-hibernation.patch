@@ -1,0 +1,190 @@
+Subject: [PATCH] wifi: brcmfmac: pcie: survive restoring from hibernation
+
+Restoring a hibernation image left the BCM43602 of a MacBookPro13,2
+dead until a reboot ("brcmf_chip_recognition: MMIO read failed:
+0xffffffff", then "probe after resume failed, err=-19").
+
+The boot that restores the image runs Apple's EFI, which leaves the
+chip with a backplane that answers every BAR0 read with a completer
+abort: the card is on the bus (config space, BARs, memory decoding and
+the link are all as before), but its status shows Signaled Target Abort
+and every MMIO read returns all ones, also after waiting. After a cold
+boot or a resume from S3 the chip answers. The driver made it worse:
+
+ - Unreachable chip: the card's root port (RP12) has the ACPI method
+   macOS resets the card with, DRST, which drives PERST#. On .restore,
+   if chipcommon reads all ones and the root port has DRST, pulse it
+   (assert, release), wait for the card and restore its config space.
+   The chip is then back at its power-on defaults and probes as at a
+   cold boot. Nothing changes where the chip answers or there is no
+   DRST.
+
+ - The interrupt thread handles mailbox data, and reads the firmware
+   console, whatever the device state. As interrupts came back after
+   the restore it read the all-ones mailbox as D2H_DEV_FWHALT and called
+   brcmf_fw_crashed(), whose scheduled bus reset then raced the
+   re-probe (with the stock driver: an oops in brcmf_pcie_setup()
+   writing through an unmapped TCM address). Handle mailbox data and
+   the console only while the device is up; enter_D3 still sees its
+   D3_ACK, as the state turns down after it.
+
+ - brcmf_pcie_pm_leave_D3() serves both .resume and .restore, and takes
+   a non-zero interrupt mask (all ones here) as "the firmware is still
+   running". After hibernation it never is. Give .restore an entry
+   that always takes the re-probe path, as a cold boot does.
+
+ - There was no .thaw, which runs after the image has been made (or when
+   hibernation fails) without a power cycle: the device stayed in D3 for
+   the rest of that session. Use leave_D3 for it. There is still no
+   .poweroff: the card loses power anyway, and a D3_INFORM timeout there
+   would abort the hibernation.
+
+Tested on a MacBookPro13,2 (BCM43602, firmware 7.35.177.61, kernel
+7.2.5) with Omarchy's swapfile hibernation: before, Wi-Fi was gone
+after every restore; with a DRST pulse (logged once per restore) it
+comes back and joins 5 GHz at once.
+---
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+@@ -16,6 +16,7 @@
+ #include <linux/kthread.h>
+ #include <linux/io.h>
+ #include <linux/random.h>
++#include <linux/acpi.h>
+ #include <linux/unaligned.h>
+ 
+ #include <soc.h>
+@@ -1041,15 +1042,23 @@
+ 	if (status) {
+ 		brcmf_pcie_write_reg32(devinfo, devinfo->reginfo->mailboxint,
+ 				       status);
+-		if (status & devinfo->reginfo->int_fn0)
+-			brcmf_pcie_handle_mb_data(devinfo);
+-		if (status & devinfo->reginfo->int_d2h_db) {
+-			if (devinfo->state == BRCMFMAC_PCIE_STATE_UP)
++		/*
++		 * While the device is down there is no running firmware whose
++		 * mailbox or console could be read: after a hibernation image
++		 * is restored the chip may even answer all ones, which read as
++		 * a firmware halt whose reset then raced the re-probe of
++		 * .restore.
++		 */
++		if (devinfo->state == BRCMFMAC_PCIE_STATE_UP) {
++			if (status & devinfo->reginfo->int_fn0)
++				brcmf_pcie_handle_mb_data(devinfo);
++			if (status & devinfo->reginfo->int_d2h_db)
+ 				brcmf_proto_msgbuf_rx_trigger(
+ 							&devinfo->pdev->dev);
+ 		}
+ 	}
+-	brcmf_pcie_bus_console_read(devinfo, false);
++	if (devinfo->state == BRCMFMAC_PCIE_STATE_UP)
++		brcmf_pcie_bus_console_read(devinfo, false);
+ 	if (devinfo->state == BRCMFMAC_PCIE_STATE_UP)
+ 		brcmf_pcie_intr_enable(devinfo);
+ 	devinfo->in_irq = false;
+@@ -2757,7 +2766,7 @@
+ }
+ 
+ 
+-static int brcmf_pcie_pm_leave_D3(struct device *dev)
++static int brcmf_pcie_pm_wake(struct device *dev, bool power_cycled)
+ {
+ 	struct brcmf_pciedev_info *devinfo;
+ 	struct brcmf_bus *bus;
+@@ -2771,7 +2780,8 @@
+ 	brcmf_dbg(PCIE, "Enter, dev=%p, bus=%p\n", dev, bus);
+ 
+ 	/* Check if device is still up and running, if so we are ready */
+-	if (brcmf_pcie_read_reg32(devinfo, devinfo->reginfo->intmask) != 0) {
++	if (!power_cycled &&
++	    brcmf_pcie_read_reg32(devinfo, devinfo->reginfo->intmask) != 0) {
+ 		brcmf_dbg(PCIE, "Try to wakeup device....\n");
+ 		if (brcmf_pcie_send_mb_data(devinfo, BRCMF_H2D_HOST_D0_INFORM))
+ 			goto cleanup;
+@@ -2798,12 +2808,84 @@
+ 	return err;
+ }
+ 
++static int brcmf_pcie_pm_leave_D3(struct device *dev)
++{
++	return brcmf_pcie_pm_wake(dev, false);
++}
+ 
++/*
++ * On Macs, the boot that restores a hibernation image runs Apple's EFI, which
++ * leaves the BCM43602 with a backplane that answers every BAR0 read with a
++ * completer abort (all ones), so neither chip recognition nor the firmware
++ * download can work. Waiting does not help. The card's root port (RP12 on
++ * the MacBookPro13,x) has the method macOS resets the card with: DRST drives
++ * PERST# (1 asserts, 0 releases). One pulse brings the chip back at its
++ * power-on defaults. Only done when the chip does not answer and the root
++ * port has the method.
++ */
++static void brcmf_pcie_pm_reset_if_dead(struct pci_dev *pdev)
++{
++#ifdef CONFIG_ACPI
++	struct pci_dev *bridge = pci_upstream_bridge(pdev);
++	acpi_handle rp = bridge ? ACPI_HANDLE(&bridge->dev) : NULL;
++	acpi_status assert, release;
++	void __iomem *regs;
++	int ms;
++
++	if (!rp || !acpi_has_method(rp, "DRST"))
++		return;
++	regs = ioremap(pci_resource_start(pdev, 0), 4);
++	if (!regs)
++		return;
++	pci_write_config_dword(pdev, BRCMF_PCIE_BAR0_WINDOW,
++			       SI_ENUM_BASE_DEFAULT);
++	if (ioread32(regs) != 0xffffffff)
++		goto out;
++
++	pci_save_state(pdev);
++	assert = acpi_execute_simple_method(rp, "DRST", 1);
++	release = acpi_execute_simple_method(rp, "DRST", 0);
++	for (ms = 0; ms < 1000 && !pci_device_is_present(pdev); ms += 20)
++		msleep(20);
++	msleep(100);
++	pci_restore_state(pdev);
++	pci_write_config_dword(pdev, BRCMF_PCIE_BAR0_WINDOW,
++			       SI_ENUM_BASE_DEFAULT);
++	if (ACPI_SUCCESS(assert) && ACPI_SUCCESS(release) &&
++	    ioread32(regs) != 0xffffffff)
++		dev_info(&pdev->dev, "chip did not answer after the restore: reset it (ACPI DRST)\n");
++	else
++		dev_warn(&pdev->dev, "chip does not answer after the restore, and an ACPI DRST reset did not help\n");
++out:
++	iounmap(regs);
++#endif
++}
++
++/*
++ * Restoring a hibernation image: the card has been powered off and set up
++ * again by the platform firmware since the image was made, so the dongle
++ * firmware the driver knew is gone even when the interrupt mask reads
++ * non-zero. Reset the chip if the platform firmware left it unreachable, and
++ * always probe afresh.
++ */
++static int brcmf_pcie_pm_restore(struct device *dev)
++{
++	brcmf_pcie_pm_reset_if_dead(to_pci_dev(dev));
++	return brcmf_pcie_pm_wake(dev, true);
++}
++
++/*
++ * .thaw runs when the image has been made (or hibernation failed) without a
++ * power cycle: wake the device as after a suspend, or it stays down. There is
++ * no .poweroff: the card loses power anyway, and a D3_INFORM timeout there
++ * would abort the hibernation.
++ */
+ static const struct dev_pm_ops brcmf_pciedrvr_pm = {
+ 	.suspend = brcmf_pcie_pm_enter_D3,
+ 	.resume = brcmf_pcie_pm_leave_D3,
+ 	.freeze = brcmf_pcie_pm_enter_D3,
+-	.restore = brcmf_pcie_pm_leave_D3,
++	.thaw = brcmf_pcie_pm_leave_D3,
++	.restore = brcmf_pcie_pm_restore,
+ };
+ 
+ 

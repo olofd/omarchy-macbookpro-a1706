@@ -102,5 +102,11 @@ in `/etc/tmpfiles.d/mem-sleep.conf` (running `install-sleep.sh` again sets it ba
 
 ## Hibernate
 
-Omarchy's installer sets up a swapfile and the resume offset. Hibernate was not tested here. It is not
-needed for Wi-Fi: 5 GHz after a resume is fixed by the driver patch in the next chapter.
+Omarchy's installer sets up a swapfile and the resume offset, so `systemctl hibernate` works: the Mac powers
+off, and the next power-on (after the disk password) restores the session. Hibernate uses no power, where deep
+sleep uses a little (fine overnight, not for a week in a bag).
+
+With the stock driver, Wi-Fi was gone after every restore until a reboot: Apple's EFI leaves the Wi-Fi chip
+unreachable in the boot that restores the image. The driver patch of the next chapter resets the chip at that
+point; `journalctl -k -b | grep "ACPI DRST"` shows when it did. The details are in
+[chapter 6](06-wifi-after-sleep.md#after-hibernation).

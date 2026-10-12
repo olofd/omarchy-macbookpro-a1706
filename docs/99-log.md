@@ -74,6 +74,19 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
 - Patch saving EFI's setup at the first probe and restoring it at a resume probe: 5 GHz at the first attempt
   ~13 s after wake, Bluetooth clean. Packaged as DKMS (brcmfmac-apple-resume).
 
+## Wi-Fi after hibernation (fixed)
+- Stock driver: after the restore "Firmware has halted or crashed", a TRAP dump, then an oops in
+  `brcmf_pcie_setup` (write through an unmapped address) racing the crash reset. Wi-Fi gone until reboot.
+- `.restore` always re-probing, plus `.thaw`: no oops, but `brcmf_chip_recognition: MMIO read failed: 0xffffffff`.
+- Interrupt thread skipping mailbox and console while the card is down: the false firmware crash is gone, the
+  re-probe still reads all ones.
+- ACPI: `_PS0`/`_PS3` of the root port RP12 (`APPU`/`APPD`) do nothing during hibernation (`_TTS(4)` sets the
+  sleep type first). Not the cause.
+- Logging build: at the restore the card's ID, BARs, memory decoding and link are as before; PCI status
+  Signaled Target Abort; the BAR0 window moved from `0x18003000` to `0x18001000` (Apple's EFI used the chip).
+  Still all ones after 335 ms. A PERST# pulse through RP12's ACPI method `DRST`: chip answers, re-probe, firmware
+  up, 5 GHz. No power cycle (`DPWR`) needed. Verified again with the final patch.
+
 ## Power
 - Frame buffer compression was off ("VT-d enabled": Skylake workaround while the graphics are behind the IOMMU).
   `intel_iommu=igfx_off`: FBC enabled. The saving is too small to measure next to normal app load.

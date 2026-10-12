@@ -94,11 +94,27 @@ missing `Signed-off-by:` line, which is added when the patch is sent upstream.
 How it was found (a driver build that dumped these registers at boot, sleep and wake, and the theories that
 were ruled out on the way) is in [chapter 6](../docs/06-wifi-after-sleep.md) of the guide.
 
+## Hibernation
+
+A second patch makes the card survive restoring a hibernation image, which left it dead until a reboot
+(`MMIO read failed: 0xffffffff`). In the boot that restores the image, Apple's EFI leaves the chip rejecting
+every register read (PCI status: Signaled Target Abort). At the restore the driver now pulses the card's reset
+line through the ACPI method macOS uses (`DRST` on its root port) when the chip reads all ones, always
+re-probes, wakes the card at `.thaw`, and no longer reads the mailbox of a card that is down (it took the all-ones
+mailbox for a firmware crash). Check after a restore:
+
+```sh
+journalctl -k -b | grep "ACPI DRST"     # the reset ran at the restore
+```
+
+Details in [chapter 6](../docs/06-wifi-after-sleep.md#after-hibernation).
+
 ## Files
 
 | File | What it is |
 | --- | --- |
-| [`0001-brcmfmac-pcie-restore-Apple-EFI-chip-setup-after-resume.patch`](0001-brcmfmac-pcie-restore-Apple-EFI-chip-setup-after-resume.patch) | the change to `drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c`, with a full description |
+| [`0001-brcmfmac-pcie-restore-Apple-EFI-chip-setup-after-resume.patch`](0001-brcmfmac-pcie-restore-Apple-EFI-chip-setup-after-resume.patch) | the change to `drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c` for 5 GHz after sleep, with a full description |
+| [`0002-brcmfmac-pcie-survive-restoring-from-hibernation.patch`](0002-brcmfmac-pcie-survive-restoring-from-hibernation.patch) | the change to the same file for restoring from hibernation, with a full description |
 | [`dkms.conf`](dkms.conf) | the DKMS package `brcmfmac-apple-resume`, version 1.0 |
 | [`dkms-build.sh`](dkms-build.sh) | what DKMS runs for each kernel: fetch the `brcm80211` folder of the kernel's upstream release (about 15 MB, from the stable tree's GitHub mirror, or git.kernel.org), cache it in `/var/cache/brcmfmac-apple-resume`, apply the patch with no fuzz, build `brcmfmac.ko` with the kernel's own configuration (the kernel's own vendor modules `brcmfmac-wcc/-cyw/-bca` keep working with it: the patch changes no exported symbol) |
 
