@@ -30,9 +30,10 @@ case "$1" in
     systemctl stop wifi-recover.service 2>/dev/null
     # The same for the Touch Bar restart a wake less than 10 s ago scheduled (it would fire mid-sleep or after).
     systemctl stop t1-touchbar-restart.timer t1-touchbar-restart.service 2>/dev/null
-    # A Thunderbolt rescan from the last wake still running (lid closed again within ~10 s): let it finish, so the
-    # controllers it brings back are removed below.
-    i=0; while systemctl is-active --quiet mac-tb-rescan.service && [ $i -lt 30 ]; do sleep 0.5; i=$((i + 1)); done
+    # A Thunderbolt rescan from the last wake still running (lid closed again within ~10 s; up to a minute when a
+    # controller does not answer): let it finish, so the controllers it brings back are removed below and it does
+    # not hand the Thunderbolt chain back to runtime PM during the sleep.
+    i=0; while systemctl is-active --quiet mac-tb-rescan.service && [ $i -lt 120 ]; do sleep 0.5; i=$((i + 1)); done
     # The T1 (iBridge, USB 05ac:8600) wakes the machine by itself a few seconds into sleep (its wakeup source
     # fired right at the wake). Keyboard, lid and power button still wake it.
     for d in /sys/bus/usb/devices/*; do
@@ -58,6 +59,21 @@ case "$1" in
       echo 0 > "$kbd/brightness"
     fi
     sync
+    # Idle, Linux powers the Thunderbolt chips down (runtime PM; the root port's ACPI _PS3 cuts their power).
+    # Sleeping from that state, they never came back: "Unable to change power state from D3hot to D0, device
+    # inaccessible", USB-C dead until a reboot (Apple's own power-up methods do not revive them either). Wake the
+    # chain first (powering a controller on resumes its bridges and root port) and keep the bridges and root
+    # ports on, so every sleep starts powered, as one shortly after a wake always did. The rescan after the wake
+    # hands them back to runtime PM.
+    : > /run/mac-tb-held
+    for p in $(tb_devices); do
+      echo on > "$p/power/control"
+      d=$(readlink -f "$p"); d=${d%/*}
+      while [ -e "$d/power/control" ] && [ -e "$d/config" ]; do
+        grep -qx "$d" /run/mac-tb-held || { echo on > "$d/power/control"; echo "$d" >> /run/mac-tb-held; }
+        d=${d%/*}
+      done
+    done
     modprobe -r thunderbolt 2>/dev/null
     for p in $(tb_devices); do
       dev=$(readlink -f "$p")
@@ -84,10 +100,12 @@ case "$1" in
     # The rescan takes ~5 s per Thunderbolt controller, and the desktop stays frozen until this hook ends: run it
     # detached, so the keyboard works at once and the USB-C ports follow ~10 s later.
     # If the unit name is still taken (a rescan from the last wake outlived the wait in pre), rescan inline.
-    systemd-run --no-block --collect --unit=mac-tb-rescan \
-      sh -c 'echo 1 > /sys/bus/pci/rescan; modprobe thunderbolt' >/dev/null 2>&1 || {
+    # After it, the bridges and root ports held on in pre go back to runtime PM.
+    rescan='echo 1 > /sys/bus/pci/rescan; modprobe thunderbolt
+      for d in $(cat /run/mac-tb-held 2>/dev/null); do echo auto > "$d/power/control"; done; rm -f /run/mac-tb-held'
+    systemd-run --no-block --collect --unit=mac-tb-rescan sh -c "$rescan" >/dev/null 2>&1 || {
       logger -t mac-sleep "could not start mac-tb-rescan detached: rescanning inline"
-      echo 1 > /sys/bus/pci/rescan; modprobe thunderbolt 2>/dev/null; }
+      sh -c "$rescan" 2>/dev/null; }
     # Wi-Fi check and wake log, detached: a background child would be killed when the suspend service ends.
     systemd-run --no-block --collect --unit=wifi-recover /usr/local/sbin/wifi-recover >/dev/null 2>&1 ||
       logger -t mac-sleep "could not start wifi-recover"

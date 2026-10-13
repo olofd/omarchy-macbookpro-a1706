@@ -90,11 +90,19 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
   exactly 2 minutes, the hook ran post then pre, hibernation, power-off, restore with Wi-Fi on 5 GHz (that
   time the chip answered without the reset). The 12-hour setting went in with `SuspendEstimationSec=12h`.
 
-## Thunderbolt after deep sleep (open)
-- Some deep-sleep wakes leave the Thunderbolt controllers powered off: "pcieport 0000:03:00.0: Unable to change
-  power state from D3hot to D0, device inaccessible", the rescan takes 35-60 s and finds no NHI or USB
-  controller; the USB-C ports are dead until a reboot (charging still works). Seen in two boots (one without
+## Thunderbolt after deep sleep (fixed in the hook)
+- Some deep-sleep wakes left the Thunderbolt controllers powered off: "pcieport 0000:03:00.0: Unable to change
+  power state from D3hot to D0, device inaccessible", the rescan took 35-60 s and found no NHI or USB
+  controller; the USB-C ports were dead until a reboot (charging still works). Seen in two boots (one without
   any hibernation); in another boot every wake brought them back after ~11 s.
+- Once dead, nothing revives them: root ports held in D0 and a rescan, the power GPIOs (0x02060000-3) cycled
+  through acpi_call, Apple's own power-up method (UPSB._PS0, ~90 s of waiting). The same was found on a
+  MacBookPro14,2 (omacom/omarchy#11570).
+- Cause: removing the controllers leaves the bridges idle, runtime PM suspends them and the root ports at once,
+  and the root port's ACPI _PS3 powers the chips down; the sleep then starts from that half-off state. The
+  hook now holds the chain on (power/control) before removing the controllers, and the rescan after the wake
+  hands it back. With it: an 8-hour night and a 7-hour day sleep on battery, and a 1-minute sleep on the
+  charger, all with the full tree back, within 0.2 s of the wake (before: ~11 s).
 
 ## Power
 - Frame buffer compression was off ("VT-d enabled": Skylake workaround while the graphics are behind the IOMMU).

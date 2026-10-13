@@ -41,6 +41,9 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
      switch the keyboard backlight off and remember its level (it stays lit during sleep otherwise); stop the
      light-sensor services; disable wake-up by the T1 (USB `05ac:8600`), which otherwise wakes the Mac a few
      seconds into sleep; write `/var/log/wake-diag/last-pre-sleep.log`.
+     Before removing them it holds the Thunderbolt bridges and root ports on (`power/control`): removed
+     from idle bridges, runtime PM would power the chips down through ACPI at once, and sleeping from that
+     state they never came back (USB-C dead until a reboot, see the log).
    - `post`: after a deep sleep, tell the T1 the Mac is awake (the ACPI call `SOCW(1)`, see
      [Deep or s2idle](#deep-or-s2idle)); restore the backlight and the light services; `echo 1 >
      /sys/bus/pci/rescan` and `modprobe thunderbolt` to bring the controllers back; start
@@ -51,7 +54,7 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
    desktop frozen until every sleep hook has finished, so run inline it delayed typing by 10 seconds after
    every wake.
 
-   The USB-C ports come back about 10 seconds after a wake; an adapter plugged in during sleep is picked up by
+   The USB-C ports come back right after a wake; an adapter plugged in during sleep is picked up by
    the rescan. The controllers are found by vendor, device ID and class, not by address, so the hook works if
    they sit elsewhere on your model.
 
