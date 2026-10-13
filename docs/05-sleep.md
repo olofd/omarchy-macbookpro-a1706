@@ -37,13 +37,15 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
    `lspci | grep -i thunderbolt`).
 5. **Make it permanent** with a systemd sleep hook, `scripts/sleep-hook.sh`, installed as
    `/usr/lib/systemd/system-sleep/mac-sleep`:
-   - `pre`: unload the `thunderbolt` module and remove the four PCI functions (`echo 1 > .../remove`);
-     switch the keyboard backlight off and remember its level (it stays lit during sleep otherwise); stop the
+   - `pre`: with the Thunderbolt sleep fix loaded (below), leave Thunderbolt alone; without it, unload the
+     `thunderbolt` module and remove the four PCI functions (`echo 1 > .../remove`); disarm wake-up by the PCIe
+     root ports (the Thunderbolt ones woke the Mac a few seconds into a lid-closed sleep); switch the keyboard
+     backlight off and remember its level (it stays lit during sleep otherwise); stop the
      light-sensor services; disable wake-up by the T1 (USB `05ac:8600`), which otherwise wakes the Mac a few
      seconds into sleep; write `/var/log/wake-diag/last-pre-sleep.log`.
-     Before removing them it holds the Thunderbolt bridges and root ports on (`power/control`): removed
-     from idle bridges, runtime PM would power the chips down through ACPI at once, and sleeping from that
-     state they never came back (USB-C dead until a reboot, see the log).
+     When it removes them, it first holds the Thunderbolt bridges and root ports on (`power/control`):
+     removed from idle bridges, runtime PM would power the chips down through ACPI at once, and sleeping from
+     that state they never came back (USB-C dead until a reboot, see the log).
    - `post`: after a deep sleep, tell the T1 the Mac is awake (the ACPI call `SOCW(1)`, see
      [Deep or s2idle](#deep-or-s2idle)); restore the backlight and the light services; `echo 1 >
      /sys/bus/pci/rescan` and `modprobe thunderbolt` to bring the controllers back; start
@@ -58,8 +60,19 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
    the rescan. The controllers are found by vendor, device ID and class, not by address, so the hook works if
    they sit elsewhere on your model.
 
-   **Unmount USB-C drives before closing the lid.** The USB-C ports hang off these controllers, so a drive is cut
-   off at every sleep (the hook syncs first and logs a warning, `journalctl -t mac-sleep`, if one was mounted).
+   **Unmount USB-C drives before closing the lid.** The USB-C ports hang off these controllers; without the
+   Thunderbolt sleep fix a drive is cut off at every sleep (the hook syncs first and logs a warning,
+   `journalctl -t mac-sleep`, if one was mounted), and with it, a device attached during sleep is not tested
+   yet.
+
+6. **The Thunderbolt sleep fix** (`scripts/install-thunderbolt-sleep.sh`, run by `setup.sh` in this step): the
+   kernel module `tb_ar_shim` ([alpine-ridge-sleep/](../alpine-ridge-sleep/)), based on Andrew Clunis' fix for
+   the MacBookPro14,1. The removal above was a workaround for two kernel-side problems, and the module fixes
+   both: the PCI core lost the Thunderbolt bridges' configuration in S3 (the module saves it in time and
+   restores it), and the firmware cut the chips' power late in S3 entry, so a wake a few seconds in left them
+   stuck until a reboot (the module cuts and restores the power itself, with Apple's ACPI methods, as macOS
+   does). With it, Thunderbolt stays in through every sleep and hibernation, and the USB-C ports are there the
+   moment the Mac wakes.
 
 The `pm_trace` feature (which stores the last device in the RTC) was tried and was **not usable** here: it
 printed the same hash after different hangs, and it scrambles the system clock.

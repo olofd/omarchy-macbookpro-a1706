@@ -90,7 +90,7 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
   exactly 2 minutes, the hook ran post then pre, hibernation, power-off, restore with Wi-Fi on 5 GHz (that
   time the chip answered without the reset). The 12-hour setting went in with `SuspendEstimationSec=12h`.
 
-## Thunderbolt after deep sleep (fixed in the hook)
+## Thunderbolt after deep sleep (fixed: kernel module)
 - Some deep-sleep wakes left the Thunderbolt controllers powered off: "pcieport 0000:03:00.0: Unable to change
   power state from D3hot to D0, device inaccessible", the rescan took 35-60 s and found no NHI or USB
   controller; the USB-C ports were dead until a reboot (charging still works). Seen in two boots (one without
@@ -103,6 +103,23 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
   hook now holds the chain on (power/control) before removing the controllers, and the rescan after the wake
   hands it back. With it: an 8-hour night and a 7-hour day sleep on battery, and a 1-minute sleep on the
   charger, all with the full tree back, within 0.2 s of the wake (before: ~11 s).
+- Research: the same failure on a MacBookPro14,1 (Andrew Clunis, orospakr/linux-apple-alpine-ridge-suspend:
+  the PCI core saves all-ones for the bridges because the Thunderbolt driver sleeps the chip first) and a
+  14,2 (omacom/omarchy#11570: sleeps of ~7 s or less kill the tree; #12194: the Thunderbolt root ports
+  self-wake the Mac).
+- Thunderbolt left in, no removal. Without a module: dead (`device inaccessible` going in and coming out,
+  `-108`, ~2 min resume). With Clunis' module (extended to both controllers): a 26 s lid sleep came back,
+  but a lid sleep that self-woke after ~9 s and a 5 s `rtcwake` sleep left the chips unpowered.
+- A dead chip comes back only after a minute or more with its power GPIOs low, then UPSB._PS0 and a fresh
+  enumeration (remove the tree at its top bridge, rescan: a plain rescan put the xHCI outside its bridge
+  window). A 1 s power blip at runtime does not kill it.
+- Cause of the short-sleep death: Linux never powers the chips down, so the firmware cuts their power late in
+  S3 entry, and an early wake catches them half off. macOS (and mainline for Cactus Ridge,
+  `quirk_apple_poweroff_thunderbolt`) cuts it first with Apple's NHI0.SXFP(0). The module now does that in
+  the upstream bridge's suspend_noirq and powers on with the root port's UGIO after the wake (~1 ms; the full
+  UPSB._PS0 took 8.5 s); a chip that still does not answer is marked gone so the wake does not wait for it.
+- With it: 5 s sleeps, a series of 8 RTC sleeps (3-30 s, all self-woken after 6-10 s), a 2-minute lid sleep
+  (no self-wake: root-port wake disarmed by the hook) and a hibernation, all with the full tree back.
 
 ## Power
 - Frame buffer compression was off ("VT-d enabled": Skylake workaround while the graphics are behind the IOMMU).

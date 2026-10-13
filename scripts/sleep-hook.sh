@@ -40,6 +40,12 @@ case "$1" in
       [ "$(cat "$d/idVendor" 2>/dev/null)" = 05ac ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = 8600 ] &&
         echo disabled > "$d/power/wakeup"
     done
+    # The same for the PCIe root ports: the Thunderbolt ones (PME) woke the Mac 9 s into a lid-closed sleep (also
+    # seen on a MacBookPro14,2, omacom/omarchy#12194), and a sleep that short leaves the Thunderbolt chips
+    # unpowered after the wake. Nothing on a root port needs to wake a laptop; hot-plug while awake still works.
+    for p in /sys/devices/pci0000:00/0000:00:*; do
+      case "$(cat "$p/class" 2>/dev/null)" in 0x0604*) [ -w "$p/power/wakeup" ] && echo disabled > "$p/power/wakeup" ;; esac
+    done
     iface=; for n in /sys/class/net/wl*; do [ -e "$n" ] && iface=${n##*/} && break; done
     mkdir -p /var/log/wake-diag
     { echo "pre-sleep $(date '+%F %T')"
@@ -65,26 +71,33 @@ case "$1" in
     # chain first (powering a controller on resumes its bridges and root port) and keep the bridges and root
     # ports on, so every sleep starts powered, as one shortly after a wake always did. The rescan after the wake
     # hands them back to runtime PM.
-    : > /run/mac-tb-held
-    for p in $(tb_devices); do
-      echo on > "$p/power/control"
-      d=$(readlink -f "$p"); d=${d%/*}
-      while [ -e "$d/power/control" ] && [ -e "$d/config" ]; do
-        grep -qx "$d" /run/mac-tb-held || { echo on > "$d/power/control"; echo "$d" >> /run/mac-tb-held; }
-        d=${d%/*}
+    # With the Thunderbolt sleep fix (the tb_ar_shim module, install-thunderbolt-sleep.sh) the controllers survive
+    # the sleep: they stay in, and the USB-C ports and anything on them keep working through it. Without it they
+    # are removed.
+    if lsmod | grep -q '^tb_ar_shim '; then
+      logger -t mac-sleep "Thunderbolt stays in (tb_ar_shim loaded)"
+    else
+      : > /run/mac-tb-held
+      for p in $(tb_devices); do
+        echo on > "$p/power/control"
+        d=$(readlink -f "$p"); d=${d%/*}
+        while [ -e "$d/power/control" ] && [ -e "$d/config" ]; do
+          grep -qx "$d" /run/mac-tb-held || { echo on > "$d/power/control"; echo "$d" >> /run/mac-tb-held; }
+          d=${d%/*}
+        done
       done
-    done
-    modprobe -r thunderbolt 2>/dev/null
-    for p in $(tb_devices); do
-      dev=$(readlink -f "$p")
-      for b in /sys/block/*; do
-        case "$(readlink -f "$b")" in "$dev"/*)
-          grep -q "^/dev/${b##*/}" /proc/mounts &&
-            logger -t mac-sleep "USB-C drive ${b##*/} is mounted and is cut off by the sleep: unmount it first" ;;
-        esac
+      modprobe -r thunderbolt 2>/dev/null
+      for p in $(tb_devices); do
+        dev=$(readlink -f "$p")
+        for b in /sys/block/*; do
+          case "$(readlink -f "$b")" in "$dev"/*)
+            grep -q "^/dev/${b##*/}" /proc/mounts &&
+              logger -t mac-sleep "USB-C drive ${b##*/} is mounted and is cut off by the sleep: unmount it first" ;;
+          esac
+        done
+        echo 1 > "$p/remove"
       done
-      echo 1 > "$p/remove"
-    done
+    fi
     ;;
   post)
     # After a "deep" (S3) sleep the T1 is never told the Mac is awake, and the Touch Bar and Touch ID stay dark.

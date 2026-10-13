@@ -78,6 +78,7 @@ fi
 step "4. Sleep (docs/05)"
 if [ -n "$FALLBACK" ]; then try "Sleep" root sh "$HERE/install-sleep.sh" "$FALLBACK"
 else try "Sleep" root sh "$HERE/install-sleep.sh"; fi
+try "Thunderbolt sleep fix" root sh "$HERE/install-thunderbolt-sleep.sh"
 
 step "5. Wi-Fi and Bluetooth after sleep: the driver fix (docs/06)"
 try "Wi-Fi sleep fix" root sh "$HERE/install-wifi-sleep-fix.sh"

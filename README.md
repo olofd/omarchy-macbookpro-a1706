@@ -21,7 +21,7 @@ on the machine, and every dead end that cost hours is written down too, so you c
 | Sound (speakers, microphone) | works | Community CS8409 driver via DKMS, with a patch for the mic's level. [docs/02-sound.md](docs/02-sound.md) |
 | 5 GHz Wi-Fi (BCM43602) | works at boot | Needs an NVRAM file. [docs/03-wifi.md](docs/03-wifi.md) |
 | Touch Bar, camera, ambient light sensor | works | Needs the T1 firmware restored; volume, brightness and keyboard-light sliders, no polling. [docs/04-touchbar.md](docs/04-touchbar.md) |
-| Sleep (deep, S3) | works | Thunderbolt controllers removed around it, the T1 told after the wake; about 0.9 % battery per hour. [docs/05-sleep.md](docs/05-sleep.md) |
+| Sleep (deep, S3) | works | A kernel module keeps Thunderbolt and USB-C alive through sleep and hibernation (Apple's power handling, as macOS does it); the T1 told after the wake; about 0.9 % battery per hour. [docs/05-sleep.md](docs/05-sleep.md), [alpine-ridge-sleep/](alpine-ridge-sleep/) |
 | Wi-Fi and Bluetooth after sleep | **fixed** (driver patch) | Stock brcmfmac fails 5 GHz and Bluetooth stutters after a resume; a DKMS-packaged patch fixes it. [docs/06-wifi-after-sleep.md](docs/06-wifi-after-sleep.md) |
 | Automatic keyboard light and screen brightness | works | From the ambient light sensor. [docs/07-light.md](docs/07-light.md) |
 | Trackpad palm trouble, scrolling, gestures | tuned | [docs/08-input.md](docs/08-input.md) |
