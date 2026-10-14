@@ -43,6 +43,27 @@ fi
 omarchy plugin list 2>/dev/null | grep -q "^$ID  *enabled " ||
   { omarchy plugin enable "$ID" >/dev/null; CHANGED=1; }
 
+# On a vertical bar the workspaces sit in the group centred on the clock, which grows upward: with 8
+# workspaces, and the indicators unfolding on hover, workspace 1 ended up under the overview button. Put the
+# workspaces right after the button (anchored at the top) and the indicators at the end of the clock group
+# (they unfold into the free space). Only when they are not there yet; a horizontal bar is left alone.
+SHELL_JSON=$HOME/.config/omarchy/shell.json
+bar_place() { # widget: the bar section it is in, or nothing
+  python3 -c 'import json, sys
+l = json.load(open(sys.argv[1])).get("bar", {}).get("layout", {})
+print(next((s for s, ws in l.items() if any(w.get("id") == sys.argv[2] for w in ws)), ""))' "$SHELL_JSON" "$1" 2>/dev/null
+}
+case "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("bar", {}).get("position", ""))' \
+          "$SHELL_JSON" 2>/dev/null)" in
+  left|right)
+    if [ "$(bar_place omarchy.workspaces)" = center ]; then
+      omarchy bar move omarchy.workspaces --after "$ID" >/dev/null
+      [ "$(bar_place omarchy.indicators)" = center ] &&
+        omarchy bar move omarchy.indicators --after omarchy.system-update >/dev/null
+      echo "Bar: workspaces moved under the overview button, indicators below the clock and weather."
+    fi ;;
+esac
+
 for f in input.lua bindings.lua hyprland.lua; do
   [ -f "$HYPR/$f.before-overview" ] || cp "$HYPR/$f" "$HYPR/$f.before-overview"
 done
