@@ -147,6 +147,19 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
   disarms lid wake when the lid is open at sleep time and arms it again after the wake: two lid-open sleeps ran
   their full 40 s.
 
+## Light sensor after wakes, and changes by hand (fixed)
+- Keyboard-light log after wakes: `light=0 avg=0 -> 200` one second after a hibernation restore, and readings
+  dropping to 0 mid-run: the scripts read a missing sensor (the T1 leaving USB at a wake) as 0, darkness. Now a
+  missing sensor is no reading, the sensor is looked up again, and the first readings after a start only fill
+  the average.
+- A change by hand was kept as an offset and the level kept moving with the light. Now it holds for an hour, or
+  until the light changes fourfold for 30 s (like Android's adaptive brightness, which keeps an adjustment until
+  the light changes clearly), kept in /run across the restarts at each wake.
+- The lock screen blanks the display and keyboard light and restores them: changes while the display is at 0,
+  and within 5-6 s of it coming back, are not taken for ones by hand.
+- Tested: screen and keyboard set by hand stayed for 15 s with both holds recorded; holds cleared, the screen
+  eased back to its curve.
+
 ## Power
 - Frame buffer compression was off ("VT-d enabled": Skylake workaround while the graphics are behind the IOMMU).
   `intel_iommu=igfx_off`: FBC enabled. The saving is too small to measure next to normal app load.
