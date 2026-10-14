@@ -11,9 +11,26 @@ capture start and unmute from delayed work, intmike_settle_ms later (default 500
 before). The first half second of a recording is silence instead of the thump. The work is cancelled when the
 capture stops and when the codec is freed.
 
+The work is also cancelled in cirrus_apple.h, the file kernels from 6.17 on build (patch_cirrus_apple.h is for
+older kernels): without it a pending unmute could outlive the codec when the driver is removed.
+
 For github.com/davidjo/snd_hda_macbookpro (and the egorenar fork), after
 0001-internal-mic-gain-from-mixer.patch. Applied by scripts/install-sound.sh.
 ---
+--- a/patch_cirrus/cirrus_apple.h
++++ b/patch_cirrus/cirrus_apple.h
+@@ -1749,8 +1749,11 @@
+ // cs_free is just a definition
+ //#define cs_8409_apple_free		snd_hda_gen_free
+ 
++static void cs_8409_intmike_settle_cancel(void);
++
+ void cs_8409_apple_remove(struct hda_codec *codec)
+ {
++	cs_8409_intmike_settle_cancel();
+ #if 0
+         struct cs8409_spec *spec = codec->spec;
+ 
 --- a/patch_cirrus/patch_cirrus_apple.h
 +++ b/patch_cirrus/patch_cirrus_apple.h
 @@ -1739,8 +1739,11 @@

@@ -1,0 +1,158 @@
+Restore the codec after a deep sleep: silent speakers until a reboot otherwise
+
+In a deep sleep (S3) the CS8409 loses its power, and with it everything that was set up once at boot: the
+subsystem id and pin default configurations Apple's EFI wrote into it, and the vendor-node, PLL, TDM and I2C
+(MAX98706/SSM3515 amp) programming of cs_8409_boot_setup(). The resume path only restored the standard HDA state
+(snd_hda_codec_init(), snd_hda_regmap_sync()): streams start normally, PipeWire shows them playing, and the
+speakers stay silent until a reboot (MacBookPro13,2 after a night of deep sleeps). A re-probe of the codec then
+also fails: it reads the reset subsystem id (the codec's own, 0x10138409), "UNKNOWN subsystem id", and empty pin
+defaults, so no outputs and only a Dummy Output.
+
+On resume, when the codec lost its power, write back the subsystem id and the pin defaults read at probe (as EFI
+does at boot), re-run cs_8409_boot_setup() and reset the one-time playback and capture setup flags, so the next
+stream sets the amps up again. The subsystem id register tells a power loss apart: only a power loss resets it
+(a link reset keeps it). .resume also runs on every runtime resume (each playback after the power-save delay),
+where the codec kept its setup, so this does nothing there.
+
+Re-running cs_8409_boot_setup() and resetting the flags is the approach of davidjo/snd_hda_macbookpro#198 (tested
+on a MacBookPro14,1); restoring the EFI setup from the probe-time values is new here (the values a re-probe needs
+were found the hard way, cf. #215, which restores them from a table for the MacBookPro13,1).
+
+For github.com/davidjo/snd_hda_macbookpro (and the egorenar fork), after 0001 and 0002. Applied by
+scripts/install-sound.sh.
+---
+--- a/patch_cirrus/cirrus_apple.h
++++ b/patch_cirrus/cirrus_apple.h
+@@ -1445,12 +1445,64 @@
+ 	return 0;
+ }
+ 
++// The codec loses its power in a deep sleep (S3): then everything set up once at boot is gone. Apple's EFI wrote
++// the subsystem id and the pin default configurations into the codec, and cs_8409_boot_setup() programmed the
++// vendor nodes, the PLL, the TDM bus and over I2C the MAX98706/SSM3515 amps; snd_hda_codec_init() and
++// snd_hda_regmap_sync() restore neither. The speakers then stay silent until a reboot, although streams start
++// normally. The subsystem id register shows it: only a power loss resets it (a link reset keeps it), to the
++// codec's own id. Not on every resume: .resume also runs when the codec comes back from runtime suspend (every
++// playback after the power-save delay), which keeps the setup.
++#define CS8409_VERB_SET_SUBSYSTEM_ID_0	0x720	/* bytes 0-3: 0x720-0x723 */
++
++static int cs_8409_boot_setup(struct hda_codec *codec);
++
++static bool cs_8409_lost_power(struct hda_codec *codec)
++{
++	unsigned int ssid = snd_hda_codec_read(codec, codec->core.afg, 0, AC_VERB_GET_SUBSYSTEM_ID, 0);
++
++	return ssid != codec->core.subsystem_id;
++}
++
++// Write back what EFI set, from the values read at probe: a later probe of the codec (a controller rebind, a
++// module reload) reads them from the codec, and without them it does not recognise the Mac and finds no outputs.
++static void cs_8409_restore_efi_setup(struct hda_codec *codec)
++{
++	const struct hda_pincfg *pin;
++	unsigned int ssid = codec->core.subsystem_id;
++	int i, b;
++
++	for (b = 0; b < 4; b++)
++		snd_hda_codec_write(codec, codec->core.afg, 0, CS8409_VERB_SET_SUBSYSTEM_ID_0 + b,
++				    (ssid >> (8 * b)) & 0xff);
++	snd_array_for_each(&codec->init_pins, i, pin)
++		for (b = 0; b < 4; b++)
++			snd_hda_codec_write(codec, pin->nid, 0, AC_VERB_SET_CONFIG_DEFAULT_BYTES_0 + b,
++					    (pin->cfg >> (8 * b)) & 0xff);
++}
++
++static void cs_8409_reinit_after_power_loss(struct hda_codec *codec)
++{
++	struct cs8409_apple_spec *spec = codec->spec;
++
++	if (!cs_8409_lost_power(codec))
++		return;
++	codec_info(codec, "lost power in sleep: restoring the EFI setup and the amps\n");
++	cs_8409_restore_efi_setup(codec);
++	cs_8409_boot_setup(codec);
++	// the next playback and capture redo their one-time setup on the reconfigured chip
++	spec->play_init = 0;
++	spec->play_init_count = 0;
++	spec->headset_play_format_setup_needed = 1;
++	spec->headset_capture_format_setup_needed = 1;
++}
++
+ static int cs_8409_apple_resume(struct hda_codec *codec)
+ {
+         myprintk("snd_hda_intel: cs_8409_apple_resume\n");
+         // code copied from default resume ops
+         snd_hda_codec_init(codec);       
+ 	snd_hda_regmap_sync(codec);
++	cs_8409_reinit_after_power_loss(codec);
+         myprintk("snd_hda_intel: end cs_8409_apple_resume\n");
+         return 0;
+ }
+--- a/patch_cirrus/patch_cirrus_apple.h
++++ b/patch_cirrus/patch_cirrus_apple.h
+@@ -1434,6 +1434,57 @@
+ 	return 0;
+ }
+ 
++// The codec loses its power in a deep sleep (S3): then everything set up once at boot is gone. Apple's EFI wrote
++// the subsystem id and the pin default configurations into the codec, and cs_8409_boot_setup() programmed the
++// vendor nodes, the PLL, the TDM bus and over I2C the MAX98706/SSM3515 amps; snd_hda_codec_init() and
++// snd_hda_regmap_sync() restore neither. The speakers then stay silent until a reboot, although streams start
++// normally. The subsystem id register shows it: only a power loss resets it (a link reset keeps it), to the
++// codec's own id. Not on every resume: .resume also runs when the codec comes back from runtime suspend (every
++// playback after the power-save delay), which keeps the setup.
++#define CS8409_VERB_SET_SUBSYSTEM_ID_0	0x720	/* bytes 0-3: 0x720-0x723 */
++
++static int cs_8409_boot_setup(struct hda_codec *codec);
++
++static bool cs_8409_lost_power(struct hda_codec *codec)
++{
++	unsigned int ssid = snd_hda_codec_read(codec, codec->core.afg, 0, AC_VERB_GET_SUBSYSTEM_ID, 0);
++
++	return ssid != codec->core.subsystem_id;
++}
++
++// Write back what EFI set, from the values read at probe: a later probe of the codec (a controller rebind, a
++// module reload) reads them from the codec, and without them it does not recognise the Mac and finds no outputs.
++static void cs_8409_restore_efi_setup(struct hda_codec *codec)
++{
++	const struct hda_pincfg *pin;
++	unsigned int ssid = codec->core.subsystem_id;
++	int i, b;
++
++	for (b = 0; b < 4; b++)
++		snd_hda_codec_write(codec, codec->core.afg, 0, CS8409_VERB_SET_SUBSYSTEM_ID_0 + b,
++				    (ssid >> (8 * b)) & 0xff);
++	snd_array_for_each(&codec->init_pins, i, pin)
++		for (b = 0; b < 4; b++)
++			snd_hda_codec_write(codec, pin->nid, 0, AC_VERB_SET_CONFIG_DEFAULT_BYTES_0 + b,
++					    (pin->cfg >> (8 * b)) & 0xff);
++}
++
++static void cs_8409_reinit_after_power_loss(struct hda_codec *codec)
++{
++	struct cs8409_apple_spec *spec = codec->spec;
++
++	if (!cs_8409_lost_power(codec))
++		return;
++	codec_info(codec, "lost power in sleep: restoring the EFI setup and the amps\n");
++	cs_8409_restore_efi_setup(codec);
++	cs_8409_boot_setup(codec);
++	// the next playback and capture redo their one-time setup on the reconfigured chip
++	spec->play_init = 0;
++	spec->play_init_count = 0;
++	spec->headset_play_format_setup_needed = 1;
++	spec->headset_capture_format_setup_needed = 1;
++}
++
+ static int cs_8409_apple_resume(struct hda_codec *codec)
+ {
+         myprintk("snd_hda_intel: cs_8409_apple_resume\n");
+@@ -1441,6 +1492,7 @@
+ 	if (codec->patch_ops.init)
+ 		codec->patch_ops.init(codec);
+ 	snd_hda_regmap_sync(codec);
++	cs_8409_reinit_after_power_loss(codec);
+         myprintk("snd_hda_intel: end cs_8409_apple_resume\n");
+         return 0;
+ }

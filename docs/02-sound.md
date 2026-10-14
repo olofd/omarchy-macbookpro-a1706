@@ -68,3 +68,33 @@ driver unmuted that amp at once.
 [`snd-hda-macbookpro/0002-internal-mic-settle-before-unmute.patch`](../snd-hda-macbookpro/0002-internal-mic-settle-before-unmute.patch)
 keeps it muted for the first 500 ms (module parameter `intmike_settle_ms`; 0 turns it off): a recording now
 starts with half a second of silence instead. When dictating, start talking a moment after the key.
+
+## Silent after a deep sleep (fixed with a driver patch)
+
+**Symptom:** after a deep sleep (S3) the speakers stay silent until a reboot. PipeWire shows the stream playing,
+the volume is up and nothing is muted. Seen on a MacBookPro13,2 after a night of test sleeps.
+
+**Cause:** in S3 the CS8409 loses its power, and with it everything set up once at boot: the subsystem id and
+pin defaults Apple's EFI writes into the codec, and the amplifier, clock and audio-bus setup the driver does at
+probe (`cs_8409_boot_setup()`, the recorded macOS boot sequence, which also programs the MAX98706/SSM3515 amps
+over I2C). The driver's resume only restored the standard HDA state. Re-probing the codec to recover then fails
+too: it reads the reset subsystem id (`UNKNOWN subsystem id 0x10138409`) and empty pin defaults, finds no outputs,
+and PipeWire shows only "Dummy Output".
+
+**Fix:**
+[`snd-hda-macbookpro/0003-restore-codec-after-deep-sleep.patch`](../snd-hda-macbookpro/0003-restore-codec-after-deep-sleep.patch):
+on a resume where the codec lost its power (its subsystem id register is reset, which only a power loss does),
+the driver writes back the subsystem id and the pin defaults it read at probe, as EFI does at boot, re-runs the
+boot setup and resets its one-time playback setup, so the next stream programs the amps again. On the resumes
+from runtime power saving (every playback after a few idle seconds) the codec kept its setup and nothing is
+done. The log says when it ran: `journalctl -k -b | grep "lost power in sleep"`. Re-running the boot setup is
+the approach of [davidjo/snd_hda_macbookpro#198](https://github.com/davidjo/snd_hda_macbookpro/pull/198);
+restoring EFI's values from the probe-time copy is new here
+([#215](https://github.com/davidjo/snd_hda_macbookpro/pull/215) restores them from a table, for the
+MacBookPro13,1).
+
+**Recovering without a reboot** if the codec ever comes up without them (for example after rebinding the HDA
+controller without the patch): write EFI's values back with the codec's hwdep device, then rebind the controller
+with the driver reloaded. On a MacBookPro13,2 the values are subsystem id `0x106b3600` and the pin defaults
+`0x24=0x90100110 0x25=0x90100111 0x2c=0x002b4020 0x3c=0x00ab9030 0x44=0xa0a60100` (verbs 0x720-0x723 and
+0x71c-0x71f; the macOS boot trace in the driver, `patch_cirrus_boot84.h`, reads the same values).

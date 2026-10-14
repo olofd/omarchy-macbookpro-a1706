@@ -121,6 +121,21 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
 - With it: 5 s sleeps, a series of 8 RTC sleeps (3-30 s, all self-woken after 6-10 s), a 2-minute lid sleep
   (no self-wake: root-port wake disarmed by the hook) and a hibernation, all with the full tree back.
 
+## Sound after deep sleep (fixed)
+- After a night of test sleeps: speakers silent, PipeWire normal (stream active, volume 60 %, not muted), a new
+  stream silent too. Codec in D0, nothing in the log (the driver's debug output is compiled out).
+- Rebinding the HDA controller made it worse: "UNKNOWN subsystem id 0x10138409", the generic driver with no
+  outputs, "Dummy Output". The codec's subsystem id and pin defaults are EFI's and a power loss clears them (a
+  link reset does not). Writing them back through /dev/snd/hwC0D0 (0x106b3600; pins from the macOS boot trace in
+  patch_cirrus_boot84.h, as in davidjo/snd_hda_macbookpro#215) and rebinding with the driver reloaded: speakers
+  back without a reboot.
+- Cause of the silence (davidjo/snd_hda_macbookpro#198): S3 powers the codec and amps off; resume did not re-run
+  the driver's boot setup. Patch 0003 does, when the subsystem id shows a power loss, and writes EFI's values
+  back first. A deep sleep after it: "lost power in sleep: restoring the EFI setup and the amps", tone heard.
+- Found on the way: patch 0002 cancelled its delayed work only in patch_cirrus_apple.h (kernels before 6.17),
+  not in cirrus_apple.h (what 7.2 builds); fixed. And install-sound.sh could not update a changed patch (it
+  patched the installed source incrementally): it now resets the source to the driver's when the patches change.
+
 ## Power
 - Frame buffer compression was off ("VT-d enabled": Skylake workaround while the graphics are behind the IOMMU).
   `intel_iommu=igfx_off`: FBC enabled. The saving is too small to measure next to normal app load.

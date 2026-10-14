@@ -57,6 +57,7 @@ sudo sh scripts/install-wifi.sh               # NVRAM for 5 GHz (the tested valu
 sudo bash scripts/install-touchbar.sh         # mains power; restores the T1 firmware; log out/in after
 sh scripts/install-touchbar-renderer.sh       # the guide's Touch Bar renderer: sliders, no polling
 sudo sh scripts/install-sleep.sh              # deep sleep; optional argument: a 2.4 GHz connection to fall back to
+sudo sh scripts/install-thunderbolt-sleep.sh  # kernel module: Thunderbolt and USB-C through sleep (no reboot)
 sudo sh scripts/install-wifi-sleep-fix.sh     # patched Wi-Fi driver (DKMS) for 5 GHz and Bluetooth after sleep; reboot
 sudo sh scripts/install-light.sh              # automatic keyboard light and screen brightness
 sh scripts/install-input.sh                   # trackpad settings, in your ~/.config/hypr/input.lua
@@ -68,16 +69,30 @@ sh scripts/install-overview.sh                # desktop extras (docs/10); also i
 In this order: the light sensor and Touch ID need the Touch Bar step (both sit on the T1), and the sleep steps
 are only worth testing once Wi-Fi works.
 
+## Check that it all works
+
+```sh
+sh scripts/verify.sh                          # every fix, one line each: ok / FAIL (no root needed)
+sudo sh scripts/sleep-test.sh                 # real sleeps woken by the clock, verify.sh after each one
+```
+
+`verify.sh` checks sound, Wi-Fi (5 GHz, traffic), Bluetooth, the T1 (Touch Bar, Touch ID, light sensor),
+Thunderbolt and USB-C, the sleep setup, and the kernel log since the last wake for the errors this guide fixes.
+`sleep-test.sh` runs deep and s2idle sleeps through systemd (so the sleep hook runs as for the lid), measures how
+long the Mac really slept, names what woke it, and runs `verify.sh` after each (`sudo sh scripts/sleep-test.sh
+deep:20 deep:600 s2idle:30`; results also in `/var/log/sleep-test.log`). Leave the Mac alone while it runs.
+
 ## Check and undo each step
 
 | Step | Check | Undo |
 | --- | --- | --- |
-| Sound | `aplay -l` lists `CS8409/CS42L83 Analog` | `sudo dkms remove snd_hda_macbookpro/0.1 --all`, `sudo rm -rf /usr/local/src/snd_hda_macbookpro /etc/wireplumber/wireplumber.conf.d/60-a1706-internal-mic.conf`, reboot |
+| Sound | `aplay -l` lists `CS8409/CS42L83 Analog`; after a deep sleep `journalctl -k -b \| grep "lost power in sleep"` | `sudo dkms remove snd_hda_macbookpro/0.1 --all`, `sudo rm -rf /usr/local/src/snd_hda_macbookpro /etc/wireplumber/wireplumber.conf.d/60-a1706-internal-mic.conf`, reboot |
 | Wi-Fi (5 GHz) | `iw phy \| grep -c 5180` prints more than 0 | `sudo sh scripts/install-wifi.sh remove`, reboot |
 | Touch Bar | `sudo t1bridge status` says `touchbar: ready` | `sudo pacman -Rns t1bridge t1bridge-dkms` and delete the `[standardagents]` lines from `/etc/pacman.conf`; the restored T1 firmware stays (it is Apple's) |
 | Touch Bar renderer | `systemctl --user cat t1-touchbar` shows the `50-a1706-renderer.conf` drop-in | `sh scripts/install-touchbar-renderer.sh remove` |
 | Sleep | `cat /sys/power/mem_sleep` shows `[deep]`; the lid closes and opens | `sudo sh scripts/install-sleep.sh remove`, reboot |
 | Wi-Fi after sleep | `modinfo -F parm brcmfmac \| grep mac_efi_restore` | `sudo sh scripts/install-wifi-sleep-fix.sh remove`, reboot |
+| Thunderbolt through sleep | `lsmod \| grep tb_ar_shim`; after a sleep `journalctl -k -b \| grep tb_ar_shim` | `sudo sh scripts/install-thunderbolt-sleep.sh remove` |
 | Light sensor | `systemctl is-active kbd-auto-backlight screen-auto-brightness` | `sudo sh scripts/install-light.sh remove` |
 | Trackpad | `hyprctl configerrors` is empty; two-finger scroll is natural | `sh scripts/install-input.sh remove` |
 | Touch ID | `sudo -k; sudo true` asks for your finger | `sudo sh scripts/install-touchid.sh unpam` (the packages: [docs/09](docs/09-touch-id.md)) |

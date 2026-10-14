@@ -1,9 +1,11 @@
 #!/bin/sh
 # Sound on the A1706 (Cirrus Logic CS8409): the in-kernel driver loads but the speakers stay silent.
 # Builds the community driver (davidjo/snd_hda_macbookpro) with DKMS so it is rebuilt on kernel updates, with
-# this guide's patches from snd-hda-macbookpro/ applied (the internal mic's level).
+# this guide's patches from snd-hda-macbookpro/ applied (the internal mic's level and thump, the codec after a deep
+# sleep).
 #   sudo sh install-sound.sh        then reboot. Safe to run again: an installed driver only gets the patches
-#                                   it is missing (and a rebuild then).
+#                                   it is missing (and a rebuild then); when patches changed, it starts again
+#                                   from the driver's source.
 set -eu
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo sh $0" >&2; exit 1; }
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -36,6 +38,14 @@ apply_patches() {
 
 if dkms status 2>/dev/null | grep -qi 'snd_hda_macbookpro.*: installed'; then
   [ -d "$src" ] || { echo "Sound: installed, but its source $src is gone; patches not checked" >&2; exit 0; }
+  # Our patches changed since the last build: a changed patch does not apply on top of its old version, so start
+  # again from the driver's own source (a git clone) and apply them all.
+  if [ "$(cat "$STAMP" 2>/dev/null)" != "$WANT" ] && [ -d "$src/.git" ]; then
+    git -C "$src" -c safe.directory="$src" checkout -q -- . &&
+      git -C "$src" -c safe.directory="$src" clean -fdq -e "${STAMP##*/}" ||
+      { echo "could not reset $src to the driver's source" >&2; exit 1; }
+    echo "patches changed: $src reset to the driver's source"
+  fi
   apply_patches "$src" || { echo "a patch did not apply to $src" >&2; exit 1; }
   if [ "$CHANGED" = 0 ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$WANT" ]; then
     echo "Sound: already installed (with this guide's patches)."; exit 0
