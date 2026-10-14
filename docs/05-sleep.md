@@ -39,7 +39,9 @@ sudo sh scripts/install-sleep.sh [MyNetwork]   # optional: a 2.4 GHz connection 
    `/usr/lib/systemd/system-sleep/mac-sleep`:
    - `pre`: with the Thunderbolt sleep fix loaded (below), leave Thunderbolt alone; without it, unload the
      `thunderbolt` module and remove the four PCI functions (`echo 1 > .../remove`); disarm wake-up by the PCIe
-     root ports (the Thunderbolt ones woke the Mac a few seconds into a lid-closed sleep); switch the keyboard
+     root ports (a lid-closed sleep woke by itself after 9 s); with the lid open, disarm the lid's wake (Apple's
+     EC arms "wake on lid open", which with the lid already open woke the Mac ~3 s into every lid-open sleep,
+     such as Omarchy's Suspend; the keyboard, trackpad and power button still wake it); switch the keyboard
      backlight off and remember its level (it stays lit during sleep otherwise); stop the
      light-sensor services; disable wake-up by the T1 (USB `05ac:8600`), which otherwise wakes the Mac a few
      seconds into sleep; write `/var/log/wake-diag/last-pre-sleep.log`.

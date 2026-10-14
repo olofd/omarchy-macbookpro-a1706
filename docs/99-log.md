@@ -136,6 +136,17 @@ This is the working log of one install (Omarchy 4.0.4 on a MacBookPro13,2, kerne
   not in cirrus_apple.h (what 7.2 builds); fixed. And install-sound.sh could not update a changed patch (it
   patched the installed source incrementally): it now resets the source to the driver's when the patches change.
 
+## Lid-open sleeps woke after ~3 s (fixed)
+- `sleep-test.sh` with the lid open: every deep sleep woke after ~3 s (on the charger and on battery), whatever
+  was asked. The wake IRQ was the ACPI SCI; the GPE counters were too noisy to tell (the EC and the keyboard
+  fire while awake too).
+- Wake rights removed one by one, 40 s sleeps: all four candidates off 38.4 s; Wi-Fi (ARPT) off 3.5 s; USB/T1
+  (XHC1) off 3.5 s; keyboard and lid off 39.6 s; lid alone off: 3 of 3 full sleeps (one earlier run woke at
+  3.2 s with GPE 0x17, the keyboard, never again).
+- Cause: LID0._PSW arms the EC's "wake on lid open" (EC.EWLO); with the lid already open it fires. The hook now
+  disarms lid wake when the lid is open at sleep time and arms it again after the wake: two lid-open sleeps ran
+  their full 40 s.
+
 ## Power
 - Frame buffer compression was off ("VT-d enabled": Skylake workaround while the graphics are behind the IOMMU).
   `intel_iommu=igfx_off`: FBC enabled. The saving is too small to measure next to normal app load.

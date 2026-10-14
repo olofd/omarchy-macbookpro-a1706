@@ -40,11 +40,21 @@ case "$1" in
       [ "$(cat "$d/idVendor" 2>/dev/null)" = 05ac ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = 8600 ] &&
         echo disabled > "$d/power/wakeup"
     done
-    # The same for the PCIe root ports: the Thunderbolt ones (PME) woke the Mac 9 s into a lid-closed sleep (also
-    # seen on a MacBookPro14,2, omacom/omarchy#12194), and a sleep that short leaves the Thunderbolt chips
-    # unpowered after the wake. Nothing on a root port needs to wake a laptop; hot-plug while awake still works.
+    # The same for the PCIe root ports: a lid-closed sleep here woke by itself after 9 s, and on a MacBookPro14,2
+    # the Thunderbolt root ports' PME woke it every ~45 s (omacom/omarchy#12194). Nothing on a root port needs to
+    # wake a laptop; hot-plug while awake still works.
     for p in /sys/devices/pci0000:00/0000:00:*; do
       case "$(cat "$p/class" 2>/dev/null)" in 0x0604*) [ -w "$p/power/wakeup" ] && echo disabled > "$p/power/wakeup" ;; esac
+    done
+    # The lid: its wake arms the EC's "wake on lid open" (LID0._PSW sets EC.EWLO), which with the lid already open
+    # woke the Mac ~3 s into every lid-open sleep (Omarchy's Suspend, idle sleep). Arm it only with the lid closed;
+    # with it open, the keyboard, trackpad and power button wake the Mac. Switched back on after the wake.
+    rm -f /run/mac-lid-wake-off
+    for l in /proc/acpi/button/lid/*/state; do
+      grep -q open "$l" 2>/dev/null || continue
+      for d in /sys/bus/acpi/devices/PNP0C0D:*/physical_node; do
+        [ -w "$d/power/wakeup" ] && echo disabled > "$d/power/wakeup" && readlink -f "$d" >> /run/mac-lid-wake-off
+      done
     done
     iface=; for n in /sys/class/net/wl*; do [ -e "$n" ] && iface=${n##*/} && break; done
     mkdir -p /var/log/wake-diag
@@ -100,6 +110,8 @@ case "$1" in
     fi
     ;;
   post)
+    for d in $(cat /run/mac-lid-wake-off 2>/dev/null); do echo enabled > "$d/power/wakeup"; done
+    rm -f /run/mac-lid-wake-off
     # After a "deep" (S3) sleep the T1 is never told the Mac is awake, and the Touch Bar and Touch ID stay dark.
     # macOS and Windows call the ACPI method ASOC.SOCW(1) at wake (t1bridge issue #18); it answers in ~90 ms.
     # (Never ASOC.FRST: an EC hard reset that leaves the T1 in recovery mode.) Not needed after s2idle.
